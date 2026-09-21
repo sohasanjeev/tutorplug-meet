@@ -4,7 +4,9 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const ROOT_DIR = path.resolve(process.cwd());
+const ROOT_DIR = fs.existsSync(path.resolve(process.cwd(), 'server/data'))
+  ? path.resolve(process.cwd(), 'server')
+  : path.resolve(process.cwd());
 const DATA_DIR = path.join(ROOT_DIR, 'data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const RECORDINGS_DIR = path.join(DATA_DIR, 'recordings');

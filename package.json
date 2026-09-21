@@ -8,14 +8,11 @@
     "server"
   ],
   "scripts": {
-    "install:server": "npm --prefix server install",
-    "install:client": "npm --prefix client install",
-    "install:all": "npm run install:server && npm run install:client",
-    "dev:server": "npm --prefix server run dev",
-    "dev:client": "npm --prefix client run dev",
-    "build:server": "npm --prefix server run build",
+    "install:all": "npm --prefix client install --include=dev && npm --prefix server install --include=dev",
     "build:client": "npm --prefix client run build",
-    "build": "npm --prefix client run build"
+    "build:server": "npm --prefix server run build",
+    "build": "npm --prefix client install --include=dev && npm --prefix client run build && npm --prefix server install --include=dev && npm --prefix server run build",
+    "start": "node server/dist/index.js"
   },
   "keywords": [
     "webrtc",
