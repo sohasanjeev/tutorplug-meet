@@ -1,0 +1,238 @@
+import { DatabaseSync } from 'node:sqlite';
+import bcrypt from 'bcryptjs';
+import { v4 as uuidv4 } from 'uuid';
+import { CONFIG } from '../config.js';
+
+export const db = new DatabaseSync(CONFIG.DB_PATH);
+
+// Helper to generate TutorPlug formatted meeting code
+export function generateTutorPlugCode(prefix?: string): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const randSegment = (len: number) =>
+    Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const cleanPrefix = prefix ? prefix.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6) : 'tp';
+  return `tp-${cleanPrefix}-${randSegment(4)}`;
+}
+
+// Initialize database schema and migrations
+export function initDatabase() {
+  db.exec('PRAGMA foreign_keys = ON;');
+  db.exec('PRAGMA journal_mode = WAL;');
+
+  // 1. Users table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      avatar TEXT,
+      role TEXT NOT NULL DEFAULT 'user',
+      google_id TEXT UNIQUE,
+      personal_meeting_code TEXT UNIQUE,
+      personal_meeting_id TEXT,
+      allowed_link_quota INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Safe migrations for existing SQLite databases
+  const userColumns = db.prepare('PRAGMA table_info(users)').all() as any[];
+  const userColumnNames = userColumns.map((c) => c.name);
+
+  if (!userColumnNames.includes('google_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN google_id TEXT;');
+  }
+  if (!userColumnNames.includes('personal_meeting_code')) {
+    db.exec('ALTER TABLE users ADD COLUMN personal_meeting_code TEXT;');
+  }
+  if (!userColumnNames.includes('personal_meeting_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN personal_meeting_id TEXT;');
+  }
+  if (!userColumnNames.includes('allowed_link_quota')) {
+    db.exec('ALTER TABLE users ADD COLUMN allowed_link_quota INTEGER NOT NULL DEFAULT 1;');
+  }
+
+  // 2. Meetings table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meetings (
+      id TEXT PRIMARY KEY,
+      code TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      host_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active', -- 'scheduled', 'active', 'ended'
+      scheduled_start_time TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      is_locked INTEGER NOT NULL DEFAULT 0,
+      waiting_room_enabled INTEGER NOT NULL DEFAULT 0,
+      is_permanent INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (host_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  const meetingColumns = db.prepare('PRAGMA table_info(meetings)').all() as any[];
+  const meetingColumnNames = meetingColumns.map((c) => c.name);
+  if (!meetingColumnNames.includes('is_permanent')) {
+    db.exec('ALTER TABLE meetings ADD COLUMN is_permanent INTEGER NOT NULL DEFAULT 0;');
+  }
+
+  // 3. Participants table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meeting_participants (
+      id TEXT PRIMARY KEY,
+      meeting_id TEXT NOT NULL,
+      user_id TEXT,
+      display_name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'participant',
+      joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+      left_at TEXT,
+      FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 4. Automatic Continuous Recordings table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recordings (
+      id TEXT PRIMARY KEY,
+      meeting_id TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      mime_type TEXT NOT NULL DEFAULT 'video/webm',
+      status TEXT NOT NULL DEFAULT 'recording',
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 5. In-Meeting Chat Messages & Shared Media table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      meeting_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      content TEXT,
+      message_type TEXT NOT NULL DEFAULT 'text',
+      file_url TEXT,
+      file_name TEXT,
+      file_size INTEGER,
+      file_mime_type TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 6. Stored Media / Uploaded Files table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS uploaded_files (
+      id TEXT PRIMARY KEY,
+      meeting_id TEXT,
+      original_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      uploaded_by_name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  // 7. Additional Meeting Link Authorization Requests table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS link_requests (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      user_email TEXT NOT NULL,
+      requested_title TEXT NOT NULL,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+      approved_meeting_code TEXT,
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  // Create indexes for fast lookup
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_meetings_code ON meetings(code);
+    CREATE INDEX IF NOT EXISTS idx_recordings_meeting_id ON recordings(meeting_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_meeting_id ON messages(meeting_id);
+    CREATE INDEX IF NOT EXISTS idx_participants_meeting_id ON meeting_participants(meeting_id);
+    CREATE INDEX IF NOT EXISTS idx_link_requests_user ON link_requests(user_id);
+    CREATE INDEX IF NOT EXISTS idx_link_requests_status ON link_requests(status);
+  `);
+
+  // Seed default admin and demo user
+  seedDefaultUsers();
+}
+
+/**
+ * Ensures a user has an active permanent personal meeting room
+ */
+export function ensureUserPersonalRoom(userId: string, userName: string): { code: string; meetingId: string } {
+  const user: any = db.prepare('SELECT personal_meeting_code, personal_meeting_id FROM users WHERE id = ?').get(userId);
+
+  if (user?.personal_meeting_code && user?.personal_meeting_id) {
+    // Check if the meeting record exists
+    const meeting = db.prepare('SELECT id FROM meetings WHERE id = ?').get(user.personal_meeting_id);
+    if (meeting) {
+      return { code: user.personal_meeting_code, meetingId: user.personal_meeting_id };
+    }
+  }
+
+  const meetingId = uuidv4();
+  const firstName = userName.split(' ')[0] || 'tutor';
+  const code = generateTutorPlugCode(firstName);
+  const title = `${userName}'s Permanent Tutoring Room`;
+
+  db.prepare(`
+    INSERT INTO meetings (
+      id, code, title, description, host_id, status, is_permanent
+    ) VALUES (?, ?, ?, 'Personal Permanent Meeting Room for TutorPlug', ?, 'active', 1)
+  `).run(meetingId, code, title, userId);
+
+  db.prepare(`
+    UPDATE users
+    SET personal_meeting_code = ?, personal_meeting_id = ?
+    WHERE id = ?
+  `).run(code, meetingId, userId);
+
+  return { code, meetingId };
+}
+
+function seedDefaultUsers() {
+  const checkAdmin: any = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@tutorplug.com');
+  if (!checkAdmin) {
+    const adminId = uuidv4();
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync('Admin@123456', salt);
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, role, allowed_link_quota)
+      VALUES (?, ?, ?, ?, 'admin', 10)
+    `).run(adminId, 'TutorPlug Administrator', 'admin@tutorplug.com', hash);
+    ensureUserPersonalRoom(adminId, 'TutorPlug Admin');
+  }
+
+  const checkDemo: any = db.prepare('SELECT id FROM users WHERE email = ?').get('tutor@tutorplug.com');
+  if (!checkDemo) {
+    const demoId = uuidv4();
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync('Tutor@123456', salt);
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, role, allowed_link_quota)
+      VALUES (?, ?, ?, ?, 'user', 1)
+    `).run(demoId, 'Sarah Jenkins (Tutor)', 'tutor@tutorplug.com', hash);
+    ensureUserPersonalRoom(demoId, 'Sarah');
+  }
+}

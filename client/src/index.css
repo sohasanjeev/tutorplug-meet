@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased font-sans select-none overflow-x-hidden transition-colors duration-200;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+html.dark body {
+  background-color: #090a0f;
+  color: #f3f4f6;
+}
+
+html.light body,
+html:not(.dark) body {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* GCORE Architectural Grid Pattern */
+.bg-grid-pattern {
+  background-size: 36px 36px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+}
+
+html.light .bg-grid-pattern,
+html:not(.dark) .bg-grid-pattern {
+  background-size: 36px 36px;
+  background-image: 
+    linear-gradient(to right, rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+}
+
+/* Radiant Orange/Amber Light Leak & Beam from Top Right */
+.orange-beam {
+  background: radial-gradient(circle 900px at 85% -15%, rgba(255, 95, 0, 0.22), rgba(245, 158, 11, 0.08) 45%, transparent 70%);
+}
+
+html.light .orange-beam,
+html:not(.dark) .orange-beam {
+  background: radial-gradient(circle 900px at 85% -15%, rgba(255, 115, 0, 0.12), rgba(245, 158, 11, 0.05) 45%, transparent 75%);
+}
+
+/* Glowing circuit / chip connectors */
+.glow-orange {
+  box-shadow: 0 0 15px rgba(249, 115, 22, 0.45);
+}
+
+.glow-orange-sm {
+  box-shadow: 0 0 8px rgba(249, 115, 22, 0.35);
+}
+
+/* Custom modern scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #5f6368;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #80868b;
+}
+
+/* Video element styling */
+video {
+  object-fit: cover;
+  transform: translateZ(0);
+}
+
+.mirror {
+  transform: scaleX(-1);
+}
+
+/* Active speaker glowing pulsing border */
+.active-speaker-ring {
+  box-shadow: 0 0 0 3px #f97316, 0 0 15px rgba(249, 115, 22, 0.6);
+  transition: box-shadow 0.2s ease-in-out;
+}
+
+/* Blinking recording indicator dot */
+@keyframes blink-rec {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.85); }
+}
+
+.rec-dot {
+  animation: blink-rec 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
