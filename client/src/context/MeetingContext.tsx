@@ -136,7 +136,8 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLocalStream(stream);
 
     // 2. Connect Socket.io
-    const newSocket = io(window.location.origin, {
+    const socketServerUrl = import.meta.env.VITE_API_URL || window.location.origin;
+    const newSocket = io(socketServerUrl, {
       transports: ['websocket', 'polling'],
     });
     setSocket(newSocket);
