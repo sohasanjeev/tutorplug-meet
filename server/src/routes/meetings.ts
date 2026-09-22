@@ -165,6 +165,7 @@ meetingsRouter.get('/user/:userId/links', (req: Request, res: Response) => {
 meetingsRouter.get('/code/:code', (req: Request, res: Response) => {
   try {
     const code = req.params.code.toLowerCase().trim();
+    const authUser = getAuthUser(req);
     let meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(code);
 
     // 1. If not found in meetings table, check if any user owns this permanent room code
@@ -178,7 +179,6 @@ meetingsRouter.get('/code/:code', (req: Request, res: Response) => {
 
     // 2. If still not found, check if requesting user is authenticated or if it's a valid tp-* permanent room code
     if (!meeting) {
-      const authUser = getAuthUser(req);
       if (authUser && code.startsWith('tp-')) {
         const meetingId = uuidv4();
         const roomTitle = `${authUser.name}'s Permanent Tutoring Room`;
@@ -193,18 +193,33 @@ meetingsRouter.get('/code/:code', (req: Request, res: Response) => {
         const rawName = parts[1] || 'Tutor';
         const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
         const meetingId = uuidv4();
-        const placeholderHostId = `host_${uuidv4().slice(0, 8)}`;
         
         // Find if user with matching name prefix exists
         const matchedUser: any = db.prepare('SELECT id, name FROM users WHERE LOWER(name) LIKE ? LIMIT 1').get(`%${rawName}%`);
-        const hostId = matchedUser ? matchedUser.id : placeholderHostId;
-        const hostName = matchedUser ? matchedUser.name : formattedName;
+        const hostId = matchedUser ? matchedUser.id : (authUser ? authUser.id : `host_${uuidv4().slice(0, 8)}`);
+        const hostName = matchedUser ? matchedUser.name : (authUser ? authUser.name : formattedName);
 
         db.prepare(`
           INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
           VALUES (?, ?, ?, 'Permanent Tutoring Room for TutorPlug', ?, 'active', 1)
         `).run(meetingId, code, `${hostName}'s Tutoring Room`, hostId);
         meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(meetingId);
+      }
+    }
+
+    // 3. Ensure host_id continuity: If authenticated user is the owner or matched tutor, update host_id
+    if (meeting && authUser) {
+      const codeSlug = (code.split('-')[1] || '').toLowerCase();
+      const isOwner = Boolean(
+        authUser.role === 'admin' ||
+        (authUser.personal_meeting_code && authUser.personal_meeting_code.toLowerCase() === code) ||
+        (codeSlug.length >= 3 && authUser.name && authUser.name.toLowerCase().includes(codeSlug))
+      );
+      if (isOwner && meeting.host_id !== authUser.id) {
+        try {
+          db.prepare('UPDATE meetings SET host_id = ? WHERE id = ?').run(authUser.id, meeting.id);
+          meeting.host_id = authUser.id;
+        } catch {}
       }
     }
 

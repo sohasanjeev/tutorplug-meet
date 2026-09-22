@@ -20,21 +20,43 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   onTogglePin,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [, setTrackRevision] = React.useState(0);
 
   useEffect(() => {
-    if (videoRef.current) {
-      if (stream) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-      } else {
+    if (!stream) {
+      if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
+      return;
     }
+
+    if (videoRef.current) {
+      if (videoRef.current.srcObject !== stream) {
+        videoRef.current.srcObject = stream;
+      }
+      videoRef.current.play().catch(() => {});
+    }
+
+    const handleTracksChanged = () => {
+      setTrackRevision((r) => r + 1);
+      if (videoRef.current) {
+        videoRef.current.play().catch(() => {});
+      }
+    };
+
+    stream.addEventListener('addtrack', handleTracksChanged);
+    stream.addEventListener('removetrack', handleTracksChanged);
+
+    return () => {
+      stream.removeEventListener('addtrack', handleTracksChanged);
+      stream.removeEventListener('removetrack', handleTracksChanged);
+    };
   }, [stream]);
 
   const isSharing = Boolean(participant.isScreenSharing);
-  const hasLiveVideoTrack = Boolean(stream && stream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live'));
-  const hasVideo = (participant.videoEnabled || isSharing) && hasLiveVideoTrack;
+  const videoTracks = stream ? stream.getVideoTracks() : [];
+  const hasLiveVideoTrack = videoTracks.some((t) => t.readyState !== 'ended');
+  const hasVideo = isSharing ? (videoTracks.length > 0) : (participant.videoEnabled && hasLiveVideoTrack);
 
   return (
     <div

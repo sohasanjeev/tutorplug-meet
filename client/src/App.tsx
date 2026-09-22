@@ -52,10 +52,10 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('hashchange', handleHash);
   }, [isInMeeting]);
 
-  const handleJoinRequested = (code: string) => {
+  const handleJoinRequested = (code: string, isHost = false) => {
     const clean = code.trim().toLowerCase();
     setActiveCode(clean);
-    window.location.hash = `#/meeting/${clean}`;
+    window.location.hash = isHost ? `#/meeting/${clean}?role=host` : `#/meeting/${clean}`;
     setCurrentView('lobby');
   };
 

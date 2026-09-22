@@ -102,9 +102,12 @@ export const api = {
     return res.json();
   },
 
-  async getMeetingByCode(code: string) {
+  async getMeetingByCode(code: string, token?: string | null, userId?: string | null) {
     const cleanCode = code.trim().toLowerCase();
-    const res = await fetch(`${API_BASE}/meetings/code/${cleanCode}`);
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (userId) headers['x-user-id'] = userId;
+    const res = await fetch(`${API_BASE}/meetings/code/${cleanCode}`, { headers });
     if (!res.ok) {
       const data = await res.json();
       throw new Error(data.error || 'Meeting not found');

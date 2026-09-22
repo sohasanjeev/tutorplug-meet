@@ -23,7 +23,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
   onJoinComplete,
   onBack,
 }) => {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { joinRoom, waitingStatus, cancelWaiting } = useMeeting();
 
   const [displayName, setDisplayName] = useState(user?.name || '');
@@ -35,6 +35,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
   const [isJoining, setIsJoining] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [meetingHostId, setMeetingHostId] = useState<string | null>(null);
+  const [isHostOverride, setIsHostOverride] = useState<boolean | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -42,7 +43,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
   useEffect(() => {
     async function checkMeeting() {
       try {
-        const res = await api.getMeetingByCode(meetingCode);
+        const res = await api.getMeetingByCode(meetingCode, token, user?.id);
         setMeetingTitle(res.meeting.title || 'TutorPlug Tutoring Room');
         setMeetingHostId(res.meeting.host_id || null);
         setErrorMessage(null);
@@ -59,7 +60,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
       }
     }
     checkMeeting();
-  }, [meetingCode]);
+  }, [meetingCode, token, user?.id]);
 
   useEffect(() => {
     let localMediaStream: MediaStream | null = null;
@@ -124,10 +125,43 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
     setIsVideoEnabled(!isVideoEnabled);
   };
 
-  const handleJoin = async () => {
-    const finalName = displayName.trim() || 'Guest Participant';
-    const isHost = Boolean(user && (user.id === meetingHostId || user.role === 'admin'));
-    const role = isHost ? 'host' : 'participant';
+  // 1. Owns this personal room
+  const ownsRoom = Boolean(
+    user?.personalMeetingCode &&
+    user.personalMeetingCode.toLowerCase() === meetingCode.toLowerCase()
+  );
+
+  // 2. Direct host ID match from DB
+  const isDirectHostId = Boolean(
+    user && meetingHostId && user.id === meetingHostId
+  );
+
+  // 3. User is an admin
+  const isAdmin = Boolean(user && user.role === 'admin');
+
+  // 4. URL explicitly has role=host
+  const hashOrSearch = (window.location.hash || '') + (window.location.search || '');
+  const hasHostUrlParam = hashOrSearch.includes('role=host');
+
+  // 5. Slug match (e.g. tp-sanjee-rb27 has slug "sanjee", user name is "Sanjeev")
+  const codeSlug = (meetingCode.split('-')[1] || '').toLowerCase();
+  const slugMatchesUser = Boolean(
+    codeSlug && codeSlug.length >= 3 && (
+      (user?.name && user.name.toLowerCase().includes(codeSlug)) ||
+      (displayName && displayName.trim().toLowerCase().includes(codeSlug))
+    )
+  );
+
+  // Auto-calculated host status
+  const calculatedIsHost = ownsRoom || isDirectHostId || isAdmin || hasHostUrlParam || slugMatchesUser;
+
+  // Effective isHost
+  const isHost = isHostOverride !== null ? isHostOverride : calculatedIsHost;
+
+  const handleJoin = async (forceHostRole?: boolean) => {
+    const effectiveIsHost = forceHostRole !== undefined ? forceHostRole : isHost;
+    const finalName = displayName.trim() || (effectiveIsHost ? (user?.name || 'Tutor') : 'Guest Participant');
+    const role = effectiveIsHost ? 'host' : 'participant';
     try {
       setIsJoining(true);
       if (previewStream) {
@@ -136,11 +170,17 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
       await joinRoom(meetingCode, finalName, role, {
         audio: isAudioEnabled,
         video: isVideoEnabled,
-      });
+      }, user?.id);
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to enter conference');
       setIsJoining(false);
     }
+  };
+
+  const handleJoinAsHost = () => {
+    setIsHostOverride(true);
+    cancelWaiting();
+    handleJoin(true);
   };
 
   return (
@@ -245,15 +285,24 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
                   You will enter the tutoring session automatically as soon as the host admits you.
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  cancelWaiting();
-                  setIsJoining(false);
-                }}
-                className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 text-xs font-semibold transition-all cursor-pointer"
-              >
-                Cancel Request
-              </button>
+              <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
+                <button
+                  onClick={handleJoinAsHost}
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-black font-bold text-xs shadow-lg flex items-center justify-center space-x-1.5 transition-all cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 fill-current" />
+                  <span>I am the Host (Enter Directly)</span>
+                </button>
+                <button
+                  onClick={() => {
+                    cancelWaiting();
+                    setIsJoining(false);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 text-xs font-semibold transition-all cursor-pointer"
+                >
+                  Cancel Request
+                </button>
+              </div>
             </div>
           )}
 
@@ -265,18 +314,27 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
               <div>
                 <h2 className="text-lg font-bold text-white">Waiting for Host...</h2>
                 <p className="text-xs text-gray-300 mt-1 leading-relaxed">
-                  The host has not started the session yet. You will be placed in line for admission once the class begins.
+                  The host has not started the session yet. If you are the tutor, click below to start class immediately.
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  cancelWaiting();
-                  setIsJoining(false);
-                }}
-                className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 text-xs font-semibold transition-all cursor-pointer"
-              >
-                Cancel Request
-              </button>
+              <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
+                <button
+                  onClick={handleJoinAsHost}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-black font-bold text-xs shadow-lg flex items-center justify-center space-x-1.5 transition-all cursor-pointer hover:scale-105"
+                >
+                  <Sparkles className="w-4 h-4 fill-current text-black" />
+                  <span>I am the Host / Tutor — Start Class Now</span>
+                </button>
+                <button
+                  onClick={() => {
+                    cancelWaiting();
+                    setIsJoining(false);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 text-xs font-semibold transition-all cursor-pointer"
+                >
+                  Cancel Request
+                </button>
+              </div>
             </div>
           )}
 
@@ -312,6 +370,35 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
                 />
               </div>
 
+              {/* Host/Student Role Indicator and Mode Switch */}
+              {isHost ? (
+                <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-orange-500/10 border border-orange-500/30 text-xs">
+                  <div className="flex items-center space-x-2 text-orange-400 font-semibold">
+                    <span>👑</span>
+                    <span>Host / Tutor Mode Active (Direct Entry)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsHostOverride(false)}
+                    className="text-[11px] text-gray-400 hover:text-gray-200 underline cursor-pointer"
+                  >
+                    Join as Student
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-white/5 border border-white/10 text-xs">
+                  <span className="text-gray-400">Joining as Student / Participant</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsHostOverride(true)}
+                    className="text-xs text-orange-400 hover:text-orange-300 font-semibold flex items-center space-x-1 cursor-pointer"
+                  >
+                    <span>I am the Tutor / Host</span>
+                    <Sparkles className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+
               <div className="bg-gradient-to-br from-red-950/40 via-red-900/20 to-[#202124] border border-red-500/40 rounded-2xl p-4 space-y-2 shadow-lg">
                 <div className="flex items-center space-x-2 text-red-400 text-xs font-bold uppercase tracking-wider">
                   <span className="w-2.5 h-2.5 rounded-full bg-red-500 rec-dot" />
@@ -327,12 +414,18 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
 
               <div className="flex flex-col sm:flex-row gap-3 pt-2">
                 <button
-                  onClick={handleJoin}
+                  onClick={() => handleJoin()}
                   disabled={isJoining}
                   className="flex-1 py-3.5 px-6 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-black font-bold text-sm transition-all shadow-lg hover:shadow-orange-500/30 disabled:opacity-50 flex items-center justify-center space-x-2 cursor-pointer"
                 >
                   <Sparkles className="w-4 h-4 text-black" />
-                  <span>{isJoining ? 'Connecting...' : 'Join now'}</span>
+                  <span>
+                    {isJoining
+                      ? 'Connecting...'
+                      : isHost
+                      ? 'Start Meeting as Host'
+                      : 'Ask to Join Class'}
+                  </span>
                 </button>
               </div>
             </>
@@ -341,7 +434,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
       </div>
 
       <div className="text-center text-xs text-gray-500 max-w-6xl mx-auto w-full pt-4">
-        AuraMeet • Enterprise-Grade WebRTC Real-Time Conferencing & Continuous Storage Engine
+        TutorPlug • Permanent 1-Link Rooms & Continuous Automatic Storage Engine
       </div>
     </div>
   );

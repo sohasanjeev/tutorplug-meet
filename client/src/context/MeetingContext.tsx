@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import type { Participant, ChatMessage, FloatingReaction, LayoutMode, WaitingParticipant } from '../types.js';
 import { WebRTCManager } from '../services/webrtc.js';
 import { RecordingStreamer } from '../services/recordingStreamer.js';
+import { useAuth } from './AuthContext.js';
 
 interface MeetingContextType {
   socket: Socket | null;
@@ -34,7 +35,13 @@ interface MeetingContextType {
   setActiveDrawer: (drawer: 'none' | 'chat' | 'people' | 'info' | 'host') => void;
   setLayoutMode: (mode: LayoutMode) => void;
   setPinnedId: (id: string | null) => void;
-  joinRoom: (code: string, displayName: string, role?: string, initialMedia?: { audio: boolean; video: boolean }) => Promise<void>;
+  joinRoom: (
+    code: string,
+    displayName: string,
+    role?: string,
+    initialMedia?: { audio: boolean; video: boolean },
+    customUserId?: string
+  ) => Promise<void>;
   toggleAudio: () => void;
   toggleVideo: () => void;
   toggleScreenShare: () => Promise<void>;
@@ -55,6 +62,7 @@ interface MeetingContextType {
 const MeetingContext = createContext<MeetingContextType | undefined>(undefined);
 
 export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [meetingCode, setMeetingCode] = useState<string | null>(null);
   const [meetingTitle, setMeetingTitle] = useState<string | null>(null);
@@ -114,7 +122,8 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     code: string,
     displayName: string,
     role = 'participant',
-    initialMedia = { audio: true, video: true }
+    initialMedia = { audio: true, video: true },
+    customUserId?: string
   ) => {
     // 1. Initialize user media
     let stream: MediaStream;
@@ -182,6 +191,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         meetingCode: code,
         displayName,
         role,
+        userId: customUserId || user?.id,
       });
     });
 

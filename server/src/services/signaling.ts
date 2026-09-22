@@ -143,9 +143,11 @@ export function setupSignaling(io: Server) {
           `).run(newId, user.personal_meeting_code, `${user.name}'s Tutoring Room`, 'Permanent Tutoring Room for TutorPlug', user.id);
           meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(newId);
         } else if (meetingCode.toLowerCase().startsWith('tp-')) {
-          const firstUser = db.prepare('SELECT id, name FROM users LIMIT 1').get() as any;
-          const hostId = firstUser ? firstUser.id : uuidv4();
-          const hostName = firstUser ? firstUser.name : 'TutorPlug Tutor';
+          const codeParts = meetingCode.split('-');
+          const slug = (codeParts[1] || '').toLowerCase();
+          const matchedUser: any = slug.length >= 3 ? db.prepare('SELECT id, name FROM users WHERE LOWER(name) LIKE ? LIMIT 1').get(`%${slug}%`) : null;
+          const hostId = matchedUser ? matchedUser.id : (userId || uuidv4());
+          const hostName = matchedUser ? matchedUser.name : (displayName || 'Tutor');
           const newId = uuidv4();
           db.prepare(`
             INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
@@ -165,14 +167,52 @@ export function setupSignaling(io: Server) {
         return;
       }
 
-      const isHost = meeting.host_id === userId || requestedRole === 'host';
+      // Determine Host Authority:
+      const codeSlug = (meetingCode.split('-')[1] || '').toLowerCase();
+      const nameMatchesSlug = Boolean(
+        codeSlug.length >= 3 && displayName.toLowerCase().includes(codeSlug)
+      );
+
+      // Check user record in database
+      const userInDb: any = userId ? db.prepare('SELECT id, name, role, personal_meeting_code FROM users WHERE id = ?').get(userId) : null;
+      const ownsMeetingCode = Boolean(
+        userInDb && userInDb.personal_meeting_code && userInDb.personal_meeting_code.toLowerCase() === meetingCode.toLowerCase()
+      );
+      const isDbAdmin = Boolean(userInDb && userInDb.role === 'admin');
+
+      // Check current room occupancy
+      const currentParticipants = rooms.get(meetingCode);
+      const hasActiveHostInRoom = Boolean(
+        currentParticipants && Array.from(currentParticipants.values()).some((p) => p.role === 'host')
+      );
+      const isRoomEmpty = !currentParticipants || currentParticipants.size === 0;
+
+      const isHost =
+        requestedRole === 'host' ||
+        meeting.host_id === userId ||
+        isDbAdmin ||
+        ownsMeetingCode ||
+        (!hasActiveHostInRoom && (nameMatchesSlug || (isRoomEmpty && requestedRole !== 'student')));
 
       if (isHost) {
+        // Ensure meeting record reflects this host if needed
+        if (meeting.host_id !== userId && (ownsMeetingCode || requestedRole === 'host' || isDbAdmin || nameMatchesSlug)) {
+          try {
+            db.prepare('UPDATE meetings SET host_id = ? WHERE id = ?').run(userId, meeting.id);
+            meeting.host_id = userId;
+          } catch {}
+        }
+
+        // Clean up from waiting room if this socket was pending
+        const waitingMap = waitingRooms.get(meetingCode);
+        if (waitingMap && waitingMap.has(socket.id)) {
+          waitingMap.delete(socket.id);
+        }
+
         // HOST BYPASSES WAITING ROOM & ENTERS IMMEDIATELY
         admitUserToRoom(socket, meeting, userId, displayName, 'host');
 
         // Check if students are waiting for this host to start the class
-        const waitingMap = waitingRooms.get(meetingCode);
         if (waitingMap && waitingMap.size > 0) {
           waitingMap.forEach((waitingUser) => {
             waitingUser.socket.emit('waiting-admission', {

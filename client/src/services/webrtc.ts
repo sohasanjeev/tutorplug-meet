@@ -208,7 +208,8 @@ export class WebRTCManager {
       if (event.track && !remoteStream.getTracks().includes(event.track)) {
         remoteStream.addTrack(event.track);
       }
-      this.onRemoteStreamCallback(remoteSocketId, remoteStream);
+      // Pass a fresh wrapper stream so React components immediately receive reference changes
+      this.onRemoteStreamCallback(remoteSocketId, new MediaStream(remoteStream.getTracks()));
     };
 
     // Peer connection state changes

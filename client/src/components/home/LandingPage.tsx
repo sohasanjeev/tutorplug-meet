@@ -20,7 +20,7 @@ import { api } from '../../services/api.js';
 import { RequestLinkModal } from './RequestLinkModal.js';
 
 interface LandingPageProps {
-  onJoinMeeting: (code: string) => void;
+  onJoinMeeting: (code: string, isHost?: boolean) => void;
   onOpenAuthModal: () => void;
 }
 
@@ -157,7 +157,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               {/* Action Buttons */}
               <div className="flex flex-col sm:flex-row gap-3 pt-1">
                 <button
-                  onClick={() => onJoinMeeting(permanentRoom?.code || user.personalMeetingCode || 'tp-room')}
+                  onClick={() => onJoinMeeting(permanentRoom?.code || user.personalMeetingCode || 'tp-room', true)}
                   className="flex-1 py-3.5 px-6 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-white font-bold text-sm flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/30 transition-all hover:scale-[1.01]"
                 >
                   <Video className="w-4 h-4" />
@@ -253,7 +253,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         {copiedCode === room.code ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                       <button
-                        onClick={() => onJoinMeeting(room.code)}
+                        onClick={() => onJoinMeeting(room.code, true)}
                         className="py-1.5 px-3.5 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 text-white font-bold text-xs flex items-center space-x-1 shadow-sm"
                       >
                         <span>Join</span>
