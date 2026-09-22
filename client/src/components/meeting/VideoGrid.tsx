@@ -27,37 +27,47 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
 }) => {
   const allTiles: { participant: Participant; stream: MediaStream | null; isLocal: boolean; tileId: string }[] = [];
 
-  if (selfParticipant) {
-    if (selfParticipant.isScreenSharing && screenStream) {
-      // 1. Dedicated presentation stage tile
-      allTiles.push({
-        participant: {
-          ...selfParticipant,
-          displayName: `${selfParticipant.displayName} (Presentation)`,
-          isScreenSharing: true,
-        },
-        stream: screenStream,
-        isLocal: true,
-        tileId: 'self-presentation',
-      });
-      // 2. Presenter face camera tile
-      allTiles.push({
-        participant: {
-          ...selfParticipant,
-          isScreenSharing: false,
-        },
-        stream: localStream,
-        isLocal: true,
-        tileId: 'self',
-      });
-    } else {
-      allTiles.push({
-        participant: selfParticipant,
-        stream: localStream,
-        isLocal: true,
-        tileId: 'self',
-      });
-    }
+  const effectiveSelf: Participant = selfParticipant || {
+    socketId: 'self',
+    userId: 'self',
+    displayName: 'You',
+    role: 'participant',
+    audioEnabled: true,
+    videoEnabled: true,
+    isScreenSharing: Boolean(screenStream),
+    isHandRaised: false,
+    joinedAt: new Date().toISOString(),
+  };
+
+  if (effectiveSelf.isScreenSharing && screenStream) {
+    // 1. Dedicated presentation stage tile
+    allTiles.push({
+      participant: {
+        ...effectiveSelf,
+        displayName: `${effectiveSelf.displayName} (Presentation)`,
+        isScreenSharing: true,
+      },
+      stream: screenStream,
+      isLocal: true,
+      tileId: 'self-presentation',
+    });
+    // 2. Presenter face camera tile
+    allTiles.push({
+      participant: {
+        ...effectiveSelf,
+        isScreenSharing: false,
+      },
+      stream: localStream,
+      isLocal: true,
+      tileId: 'self',
+    });
+  } else {
+    allTiles.push({
+      participant: effectiveSelf,
+      stream: localStream,
+      isLocal: true,
+      tileId: 'self',
+    });
   }
 
   participants.forEach((p) => {

@@ -66,15 +66,16 @@ const AppContent: React.FC = () => {
     if (view === 'admin') window.location.hash = '#/admin';
   };
 
-  if (isInMeeting || currentView === 'meeting') {
+  // Strictly render MeetingRoom only when room-joined has populated the call state
+  if (isInMeeting) {
     return <MeetingRoom />;
   }
 
-  if (currentView === 'lobby' && activeCode) {
+  if ((currentView === 'lobby' || window.location.hash.startsWith('#/meeting/') || window.location.hash.startsWith('#/join/')) && activeCode) {
     return (
       <PreJoinLobby
         meetingCode={activeCode}
-        onJoinComplete={() => setCurrentView('meeting')}
+        onJoinComplete={() => {}}
         onBack={() => handleNavigate('home')}
       />
     );

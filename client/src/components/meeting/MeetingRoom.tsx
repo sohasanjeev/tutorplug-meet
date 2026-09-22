@@ -30,6 +30,10 @@ export const MeetingRoom: React.FC = () => {
     setHasRecordedNoticeDismissed,
   } = useMeeting();
 
+  const hashMeetingCode = (window.location.hash.split('/meeting/')[1] || '').split('?')[0];
+  const displayCode = meetingCode || hashMeetingCode;
+  const displayTitle = meetingTitle || (displayCode ? `Tutoring Room (${displayCode})` : 'TutorPlug Session');
+
   return (
     <div className="relative w-screen h-screen bg-[#131314] flex flex-col overflow-hidden select-none">
       {/* Host Admission Notification Modal / Toast */}
@@ -49,9 +53,9 @@ export const MeetingRoom: React.FC = () => {
 
           <div className="hidden sm:flex items-center space-x-2 pl-2 border-l border-[#3c4043]">
             <h2 className="text-sm font-semibold text-gray-200 truncate max-w-xs">
-              {meetingTitle || 'Conference'}
+              {displayTitle}
             </h2>
-            <span className="text-xs font-mono text-gray-400">({meetingCode})</span>
+            {displayCode && <span className="text-xs font-mono text-gray-400">({displayCode})</span>}
           </div>
         </div>
 

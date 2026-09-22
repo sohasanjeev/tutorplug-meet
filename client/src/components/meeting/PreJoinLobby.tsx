@@ -137,21 +137,11 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
         audio: isAudioEnabled,
         video: isVideoEnabled,
       });
-      if (isHost) {
-        onJoinComplete();
-      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to enter conference');
       setIsJoining(false);
     }
   };
-
-  // When admitted by host, automatically enter meeting room
-  useEffect(() => {
-    if (isJoining && waitingStatus === 'none') {
-      onJoinComplete();
-    }
-  }, [waitingStatus, isJoining, onJoinComplete]);
 
   return (
     <div className="min-h-screen bg-[#131314] text-white flex flex-col justify-between p-4 sm:p-8 select-none">

@@ -4,13 +4,45 @@ const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
 ];
+
+function createBlankTrack(kind: 'audio' | 'video'): MediaStreamTrack {
+  if (kind === 'video') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#18191d';
+      ctx.fillRect(0, 0, 640, 360);
+    }
+    const stream = canvas.captureStream(5);
+    const track = stream.getVideoTracks()[0];
+    track.enabled = false;
+    return track;
+  } else {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const dst = ctx.createMediaStreamDestination();
+    osc.connect(dst);
+    osc.start();
+    const track = dst.stream.getAudioTracks()[0];
+    track.enabled = false;
+    return track;
+  }
+}
 
 export class WebRTCManager {
   private socket: Socket;
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
   private peerConnections: Map<string, RTCPeerConnection> = new Map();
+  private pendingCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
+  private remoteStreamsMap: Map<string, MediaStream> = new Map();
   private onRemoteStreamCallback: (socketId: string, stream: MediaStream) => void;
   private onRemoteStreamRemovedCallback: (socketId: string) => void;
   private audioAnalyser: AnalyserNode | null = null;
@@ -29,6 +61,14 @@ export class WebRTCManager {
   }
 
   setLocalStream(stream: MediaStream) {
+    // Ensure stream has both audio and video tracks for transceiver pre-allocation
+    if (stream.getAudioTracks().length === 0) {
+      try { stream.addTrack(createBlankTrack('audio')); } catch {}
+    }
+    if (stream.getVideoTracks().length === 0) {
+      try { stream.addTrack(createBlankTrack('video')); } catch {}
+    }
+
     this.localStream = stream;
     this.setupAudioAnalysis(stream);
     this.setupContinuousRecordingIngest(stream);
@@ -39,9 +79,9 @@ export class WebRTCManager {
       stream.getTracks().forEach((track) => {
         const sender = senders.find((s) => s.track?.kind === track.kind);
         if (sender) {
-          sender.replaceTrack(track);
+          sender.replaceTrack(track).catch(() => {});
         } else {
-          pc.addTrack(track, stream);
+          try { pc.addTrack(track, stream); } catch {}
         }
       });
     });
@@ -144,7 +184,7 @@ export class WebRTCManager {
     // Add local media tracks
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, this.localStream!);
+        try { pc.addTrack(track, this.localStream!); } catch {}
       });
     }
 
@@ -160,9 +200,15 @@ export class WebRTCManager {
 
     // Remote Track handler
     pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        this.onRemoteStreamCallback(remoteSocketId, event.streams[0]);
+      let remoteStream = this.remoteStreamsMap.get(remoteSocketId);
+      if (!remoteStream) {
+        remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream();
+        this.remoteStreamsMap.set(remoteSocketId, remoteStream);
       }
+      if (event.track && !remoteStream.getTracks().includes(event.track)) {
+        remoteStream.addTrack(event.track);
+      }
+      this.onRemoteStreamCallback(remoteSocketId, remoteStream);
     };
 
     // Peer connection state changes
@@ -175,7 +221,10 @@ export class WebRTCManager {
     // If caller, create Offer
     if (isInitiator) {
       try {
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true,
+        });
         await pc.setLocalDescription(offer);
         this.socket.emit('signal', {
           to: remoteSocketId,
@@ -187,6 +236,21 @@ export class WebRTCManager {
     }
 
     return pc;
+  }
+
+  /**
+   * Drain any queued candidates once remote description is set
+   */
+  private async drainPendingCandidates(fromSocketId: string, pc: RTCPeerConnection) {
+    const list = this.pendingCandidates.get(fromSocketId) || [];
+    for (const cand of list) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(cand));
+      } catch (e) {
+        console.warn('Error adding queued ICE candidate:', e);
+      }
+    }
+    this.pendingCandidates.delete(fromSocketId);
   }
 
   /**
@@ -202,6 +266,8 @@ export class WebRTCManager {
     try {
       if (signal.type === 'offer') {
         await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        await this.drainPendingCandidates(fromSocketId, pc);
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         this.socket.emit('signal', {
@@ -210,8 +276,17 @@ export class WebRTCManager {
         });
       } else if (signal.type === 'answer') {
         await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        await this.drainPendingCandidates(fromSocketId, pc);
       } else if (signal.type === 'candidate' && signal.candidate) {
-        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } else {
+          // Queue candidate until remote description is set
+          if (!this.pendingCandidates.has(fromSocketId)) {
+            this.pendingCandidates.set(fromSocketId, []);
+          }
+          this.pendingCandidates.get(fromSocketId)!.push(signal.candidate);
+        }
       }
     } catch (err) {
       console.error('Error handling WebRTC signal:', err);
@@ -235,12 +310,17 @@ export class WebRTCManager {
     const videoTrack = screenStream.getVideoTracks()[0];
 
     // Replace video track in all active peer connections
-    this.peerConnections.forEach((pc) => {
+    this.peerConnections.forEach(async (pc, remoteSocketId) => {
       const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
       if (sender) {
-        sender.replaceTrack(videoTrack);
+        sender.replaceTrack(videoTrack).catch(() => {});
       } else {
         pc.addTrack(videoTrack, screenStream);
+        try {
+          const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+          await pc.setLocalDescription(offer);
+          this.socket.emit('signal', { to: remoteSocketId, signal: { type: 'offer', sdp: offer } });
+        } catch {}
       }
     });
 
@@ -262,7 +342,7 @@ export class WebRTCManager {
         this.peerConnections.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
           if (sender) {
-            sender.replaceTrack(cameraTrack);
+            sender.replaceTrack(cameraTrack).catch(() => {});
           }
         });
       }
@@ -275,6 +355,8 @@ export class WebRTCManager {
       pc.close();
       this.peerConnections.delete(socketId);
     }
+    this.pendingCandidates.delete(socketId);
+    this.remoteStreamsMap.delete(socketId);
     this.onRemoteStreamRemovedCallback(socketId);
   }
 
@@ -286,6 +368,8 @@ export class WebRTCManager {
     }
     this.peerConnections.forEach((pc) => pc.close());
     this.peerConnections.clear();
+    this.pendingCandidates.clear();
+    this.remoteStreamsMap.clear();
     if (this.screenStream) {
       this.screenStream.getTracks().forEach((t) => t.stop());
     }

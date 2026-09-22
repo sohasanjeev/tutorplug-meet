@@ -23,6 +23,13 @@ export function setupSignaling(io: Server) {
   const meetingIdMap: Map<string, string> = new Map();
   // Map of meetingCode -> Map<socketId, WaitingParticipant>
   const waitingRooms: Map<string, Map<string, { socketId: string; userId: string; displayName: string; role: string; requestedAt: string; socket: Socket }>> = new Map();
+  // Map of socketId -> meetingCode
+  const socketToRoomMap: Map<string, string> = new Map();
+  // Map of socketId -> meetingId
+  const socketToMeetingIdMap: Map<string, string> = new Map();
+
+  const getSocketRoom = (s: Socket): string | null => (s as any).currentMeetingCode || socketToRoomMap.get(s.id) || null;
+  const getSocketMeetingId = (s: Socket): string | null => (s as any).currentMeetingId || socketToMeetingIdMap.get(s.id) || null;
 
   function broadcastWaitingList(meetingCode: string) {
     const waitingMap = waitingRooms.get(meetingCode);
@@ -44,14 +51,13 @@ export function setupSignaling(io: Server) {
   }
 
   io.on('connection', (socket: Socket) => {
-    let currentMeetingCode: string | null = null;
-    let currentMeetingId: string | null = null;
-
     // Helper: Execute complete admission into meeting room
     const admitUserToRoom = (targetSocket: Socket, meeting: any, userId: string, displayName: string, role: 'host' | 'participant') => {
       const meetingCode = meeting.code;
-      currentMeetingCode = meetingCode;
-      currentMeetingId = meeting.id;
+      (targetSocket as any).currentMeetingCode = meetingCode;
+      (targetSocket as any).currentMeetingId = meeting.id;
+      socketToRoomMap.set(targetSocket.id, meetingCode);
+      socketToMeetingIdMap.set(targetSocket.id, meeting.id);
       meetingIdMap.set(meetingCode, meeting.id);
 
       targetSocket.join(meetingCode);
@@ -225,25 +231,27 @@ export function setupSignaling(io: Server) {
 
     // --- Host Admission Control Handlers ---
     socket.on('admit-participant', (data: any) => {
+      const roomCode = getSocketRoom(socket);
       const targetId = data?.targetSocketId || data?.participantSocketId || data?.socketId;
-      if (!currentMeetingCode || !targetId) return;
-      const waitingMap = waitingRooms.get(currentMeetingCode);
+      if (!roomCode || !targetId) return;
+      const waitingMap = waitingRooms.get(roomCode);
       if (!waitingMap || !waitingMap.has(targetId)) return;
 
       const waitingUser = waitingMap.get(targetId)!;
       waitingMap.delete(targetId);
 
-      const meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(currentMeetingCode.toLowerCase());
+      const meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(roomCode.toLowerCase());
       if (meeting) {
         admitUserToRoom(waitingUser.socket, meeting, waitingUser.userId, waitingUser.displayName, 'participant');
       }
-      broadcastWaitingList(currentMeetingCode);
+      broadcastWaitingList(roomCode);
     });
 
     socket.on('deny-participant', (data: any) => {
+      const roomCode = getSocketRoom(socket);
       const targetId = data?.targetSocketId || data?.participantSocketId || data?.socketId;
-      if (!currentMeetingCode || !targetId) return;
-      const waitingMap = waitingRooms.get(currentMeetingCode);
+      if (!roomCode || !targetId) return;
+      const waitingMap = waitingRooms.get(roomCode);
       if (!waitingMap || !waitingMap.has(targetId)) return;
 
       const waitingUser = waitingMap.get(targetId)!;
@@ -253,28 +261,30 @@ export function setupSignaling(io: Server) {
         reason: data?.reason || 'The host did not admit you to the session.',
         message: data?.reason || 'The host did not admit you to this class.',
       });
-      broadcastWaitingList(currentMeetingCode);
+      broadcastWaitingList(roomCode);
     });
 
     socket.on('admit-all', () => {
-      if (!currentMeetingCode) return;
-      const waitingMap = waitingRooms.get(currentMeetingCode);
+      const roomCode = getSocketRoom(socket);
+      if (!roomCode) return;
+      const waitingMap = waitingRooms.get(roomCode);
       if (!waitingMap) return;
 
-      const meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(currentMeetingCode.toLowerCase());
+      const meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(roomCode.toLowerCase());
       if (!meeting) return;
 
-      waitingMap.forEach((waitingUser, sId) => {
+      waitingMap.forEach((waitingUser) => {
         admitUserToRoom(waitingUser.socket, meeting, waitingUser.userId, waitingUser.displayName, 'participant');
       });
       waitingMap.clear();
-      broadcastWaitingList(currentMeetingCode);
+      broadcastWaitingList(roomCode);
     });
 
     socket.on('cancel-waiting', () => {
-      if (currentMeetingCode && waitingRooms.has(currentMeetingCode)) {
-        waitingRooms.get(currentMeetingCode)!.delete(socket.id);
-        broadcastWaitingList(currentMeetingCode);
+      const roomCode = getSocketRoom(socket);
+      if (roomCode && waitingRooms.has(roomCode)) {
+        waitingRooms.get(roomCode)!.delete(socket.id);
+        broadcastWaitingList(roomCode);
       }
     });
 
@@ -288,14 +298,15 @@ export function setupSignaling(io: Server) {
 
     // --- 3. Media State Updates (Mute/Camera/Screen Share) ---
     socket.on('media-state', (data: { audioEnabled?: boolean; videoEnabled?: boolean; isScreenSharing?: boolean }) => {
-      if (!currentMeetingCode || !rooms.has(currentMeetingCode)) return;
-      const participant = rooms.get(currentMeetingCode)!.get(socket.id);
+      const roomCode = getSocketRoom(socket);
+      if (!roomCode || !rooms.has(roomCode)) return;
+      const participant = rooms.get(roomCode)!.get(socket.id);
       if (participant) {
         if (data.audioEnabled !== undefined) participant.audioEnabled = data.audioEnabled;
         if (data.videoEnabled !== undefined) participant.videoEnabled = data.videoEnabled;
         if (data.isScreenSharing !== undefined) participant.isScreenSharing = data.isScreenSharing;
 
-        socket.to(currentMeetingCode).emit('participant-media-changed', {
+        socket.to(roomCode).emit('participant-media-changed', {
           socketId: socket.id,
           ...data,
         });
@@ -304,8 +315,9 @@ export function setupSignaling(io: Server) {
 
     // --- 4. Active Speaker Volume Level Meter ---
     socket.on('audio-level', (data: { level: number }) => {
-      if (!currentMeetingCode) return;
-      socket.to(currentMeetingCode).emit('active-speaker', {
+      const roomCode = getSocketRoom(socket);
+      if (!roomCode) return;
+      socket.to(roomCode).emit('active-speaker', {
         socketId: socket.id,
         level: data.level,
       });
@@ -313,11 +325,12 @@ export function setupSignaling(io: Server) {
 
     // --- 5. Hand Raise ---
     socket.on('hand-raise', (data: { isRaised: boolean }) => {
-      if (!currentMeetingCode || !rooms.has(currentMeetingCode)) return;
-      const participant = rooms.get(currentMeetingCode)!.get(socket.id);
+      const roomCode = getSocketRoom(socket);
+      if (!roomCode || !rooms.has(roomCode)) return;
+      const participant = rooms.get(roomCode)!.get(socket.id);
       if (participant) {
         participant.isHandRaised = data.isRaised;
-        io.to(currentMeetingCode).emit('hand-raise-updated', {
+        io.to(roomCode).emit('hand-raise-updated', {
           socketId: socket.id,
           displayName: participant.displayName,
           isRaised: data.isRaised,
@@ -327,10 +340,11 @@ export function setupSignaling(io: Server) {
 
     // --- 6. Live Emoji Reactions ---
     socket.on('send-reaction', (data: { emoji: string }) => {
-      if (!currentMeetingCode || !rooms.has(currentMeetingCode)) return;
-      const participant = rooms.get(currentMeetingCode)!.get(socket.id);
+      const roomCode = getSocketRoom(socket);
+      if (!roomCode || !rooms.has(roomCode)) return;
+      const participant = rooms.get(roomCode)!.get(socket.id);
       const senderName = participant ? participant.displayName : 'Participant';
-      io.to(currentMeetingCode).emit('reaction-received', {
+      io.to(roomCode).emit('reaction-received', {
         emoji: data.emoji,
         senderName,
         id: uuidv4(),
@@ -346,8 +360,10 @@ export function setupSignaling(io: Server) {
       fileSize?: number;
       fileMimeType?: string;
     }) => {
-      if (!currentMeetingCode || !currentMeetingId || !rooms.has(currentMeetingCode)) return;
-      const participant = rooms.get(currentMeetingCode)!.get(socket.id);
+      const roomCode = getSocketRoom(socket);
+      const mId = getSocketMeetingId(socket);
+      if (!roomCode || !mId || !rooms.has(roomCode)) return;
+      const participant = rooms.get(roomCode)!.get(socket.id);
       const senderName = participant ? participant.displayName : 'Anonymous';
       const senderId = participant ? participant.userId : socket.id;
 
@@ -364,7 +380,7 @@ export function setupSignaling(io: Server) {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           messageId,
-          currentMeetingId,
+          mId,
           senderId,
           senderName,
           content,
@@ -380,7 +396,7 @@ export function setupSignaling(io: Server) {
 
       const chatPayload = {
         id: messageId,
-        meetingId: currentMeetingId,
+        meetingId: mId,
         senderId,
         senderName,
         content,
@@ -392,13 +408,14 @@ export function setupSignaling(io: Server) {
         createdAt: new Date().toISOString(),
       };
 
-      io.to(currentMeetingCode).emit('chat-message', chatPayload);
+      io.to(roomCode).emit('chat-message', chatPayload);
     });
 
     // --- 8. Continuous Server-Side Recording Ingest ---
     socket.on('recording-chunk', (chunk: ArrayBuffer | Buffer) => {
-      if (currentMeetingId) {
-        RecordingManager.appendChunk(currentMeetingId, chunk);
+      const mId = getSocketMeetingId(socket);
+      if (mId) {
+        RecordingManager.appendChunk(mId, chunk);
       }
     });
 
@@ -408,8 +425,9 @@ export function setupSignaling(io: Server) {
     });
 
     socket.on('host-mute-all', () => {
-      if (!currentMeetingCode) return;
-      socket.to(currentMeetingCode).emit('host-instructed-mute');
+      const roomCode = getSocketRoom(socket);
+      if (!roomCode) return;
+      socket.to(roomCode).emit('host-instructed-mute');
     });
 
     socket.on('host-kick-participant', (data: { targetSocketId: string }) => {
@@ -417,45 +435,50 @@ export function setupSignaling(io: Server) {
     });
 
     socket.on('host-end-meeting-all', async () => {
-      if (!currentMeetingCode || !currentMeetingId) return;
+      const roomCode = getSocketRoom(socket);
+      const mId = getSocketMeetingId(socket);
+      if (!roomCode || !mId) return;
 
-      console.log(`[Signaling] Host initiated End Meeting For All in ${currentMeetingCode}`);
+      console.log(`[Signaling] Host initiated End Meeting For All in ${roomCode}`);
 
       // Update meeting status in DB
       db.prepare(`
         UPDATE meetings
         SET status = 'ended', ended_at = datetime('now')
         WHERE id = ?
-      `).run(currentMeetingId);
+      `).run(mId);
 
       // Stop continuous recording and seal file
-      const recordingRecord = await RecordingManager.stopRecording(currentMeetingId);
+      const recordingRecord = await RecordingManager.stopRecording(mId);
 
       // Notify all users in room
-      io.to(currentMeetingCode).emit('meeting-ended-by-host', {
+      io.to(roomCode).emit('meeting-ended-by-host', {
         recording: recordingRecord,
       });
 
       // Clear memory room
-      rooms.delete(currentMeetingCode);
+      rooms.delete(roomCode);
     });
 
     // --- 10. Disconnect Handling ---
     socket.on('disconnect', async () => {
+      const roomCode = getSocketRoom(socket);
+      const mId = getSocketMeetingId(socket);
+
       // Check if user was waiting in waiting room
-      if (currentMeetingCode && waitingRooms.has(currentMeetingCode)) {
-        if (waitingRooms.get(currentMeetingCode)!.delete(socket.id)) {
-          broadcastWaitingList(currentMeetingCode);
+      if (roomCode && waitingRooms.has(roomCode)) {
+        if (waitingRooms.get(roomCode)!.delete(socket.id)) {
+          broadcastWaitingList(roomCode);
         }
       }
 
-      if (currentMeetingCode && rooms.has(currentMeetingCode)) {
-        const roomParticipants = rooms.get(currentMeetingCode)!;
+      if (roomCode && rooms.has(roomCode)) {
+        const roomParticipants = rooms.get(roomCode)!;
         const participant = roomParticipants.get(socket.id);
         roomParticipants.delete(socket.id);
 
         if (participant) {
-          socket.to(currentMeetingCode).emit('user-disconnected', {
+          socket.to(roomCode).emit('user-disconnected', {
             socketId: socket.id,
             displayName: participant.displayName,
           });
@@ -463,18 +486,21 @@ export function setupSignaling(io: Server) {
 
         // If last participant left room, automatically stop and seal recording
         if (roomParticipants.size === 0) {
-          rooms.delete(currentMeetingCode);
-          if (currentMeetingId) {
-            console.log(`[Signaling] Room ${currentMeetingCode} is empty. Sealing continuous recording.`);
-            await RecordingManager.stopRecording(currentMeetingId);
+          rooms.delete(roomCode);
+          if (mId) {
+            console.log(`[Signaling] Room ${roomCode} is empty. Sealing continuous recording.`);
+            await RecordingManager.stopRecording(mId);
             db.prepare(`
               UPDATE meetings
               SET status = 'ended', ended_at = datetime('now')
               WHERE id = ? AND status = 'active'
-            `).run(currentMeetingId);
+            `).run(mId);
           }
         }
       }
+
+      socketToRoomMap.delete(socket.id);
+      socketToMeetingIdMap.delete(socket.id);
     });
   });
 }
