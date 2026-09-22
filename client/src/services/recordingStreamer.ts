@@ -185,18 +185,28 @@ export class RecordingStreamer {
       const h = this.canvas.height;
 
       // 1. Check if screen share is active
-      const hasScreen = this.screenStream && this.screenStream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live');
-      // 2. Check if local camera is active
-      const hasCamera = this.localStream && this.localStream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live');
+      const hasScreen = Boolean(this.screenStream && this.screenStream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live'));
+      const hasCamera = Boolean(this.localStream && this.localStream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live'));
 
-      if (hasScreen && this.screenVideoEl.readyState >= 2) {
-        // Render screen share
+      if (hasScreen && this.screenVideoEl.videoWidth > 0) {
+        // Render screen share with preserved aspect ratio
         this.ctx.fillStyle = '#0a0b0e';
         this.ctx.fillRect(0, 0, w, h);
-        this.ctx.drawImage(this.screenVideoEl, 0, 0, w, h);
+
+        const sw = this.screenVideoEl.videoWidth || w;
+        const sh = this.screenVideoEl.videoHeight || h;
+        const scale = Math.min(w / sw, h / sh);
+        const dw = sw * scale;
+        const dh = sh * scale;
+        const dx = (w - dw) / 2;
+        const dy = (h - dh) / 2;
+
+        try {
+          this.ctx.drawImage(this.screenVideoEl, dx, dy, dw, dh);
+        } catch (e) {}
 
         // Small PiP camera in bottom right if camera active
-        if (hasCamera && this.localVideoEl.readyState >= 2) {
+        if (hasCamera && this.localVideoEl.videoWidth > 0) {
           const pipW = 260;
           const pipH = 150;
           const pipX = w - pipW - 24;
@@ -207,14 +217,18 @@ export class RecordingStreamer {
           this.ctx.lineWidth = 3;
           this.ctx.strokeRect(pipX, pipY, pipW, pipH);
           this.ctx.fillRect(pipX, pipY, pipW, pipH);
-          this.ctx.drawImage(this.localVideoEl, pipX, pipY, pipW, pipH);
+          try {
+            this.ctx.drawImage(this.localVideoEl, pipX, pipY, pipW, pipH);
+          } catch (e) {}
           this.ctx.restore();
         }
-      } else if (hasCamera && this.localVideoEl.readyState >= 2) {
+      } else if (hasCamera && this.localVideoEl.videoWidth > 0) {
         // Render full camera video
         this.ctx.fillStyle = '#0a0b0e';
         this.ctx.fillRect(0, 0, w, h);
-        this.ctx.drawImage(this.localVideoEl, 0, 0, w, h);
+        try {
+          this.ctx.drawImage(this.localVideoEl, 0, 0, w, h);
+        } catch (e) {}
       } else {
         // When camera is off: Render clean branded TutorPlug class card (NEVER black/dark!)
         // Background gradient

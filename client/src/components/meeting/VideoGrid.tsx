@@ -5,6 +5,7 @@ import { VideoTile } from './VideoTile.js';
 interface VideoGridProps {
   selfParticipant: Participant | null;
   localStream: MediaStream | null;
+  screenStream?: MediaStream | null;
   participants: Participant[];
   remoteStreams: Map<string, MediaStream>;
   activeSpeakerId: string | null;
@@ -16,6 +17,7 @@ interface VideoGridProps {
 export const VideoGrid: React.FC<VideoGridProps> = ({
   selfParticipant,
   localStream,
+  screenStream,
   participants,
   remoteStreams,
   activeSpeakerId,
@@ -23,14 +25,39 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   pinnedId,
   onTogglePin,
 }) => {
-  const allTiles: { participant: Participant; stream: MediaStream | null; isLocal: boolean }[] = [];
+  const allTiles: { participant: Participant; stream: MediaStream | null; isLocal: boolean; tileId: string }[] = [];
 
   if (selfParticipant) {
-    allTiles.push({
-      participant: selfParticipant,
-      stream: localStream,
-      isLocal: true,
-    });
+    if (selfParticipant.isScreenSharing && screenStream) {
+      // 1. Dedicated presentation stage tile
+      allTiles.push({
+        participant: {
+          ...selfParticipant,
+          displayName: `${selfParticipant.displayName} (Presentation)`,
+          isScreenSharing: true,
+        },
+        stream: screenStream,
+        isLocal: true,
+        tileId: 'self-presentation',
+      });
+      // 2. Presenter face camera tile
+      allTiles.push({
+        participant: {
+          ...selfParticipant,
+          isScreenSharing: false,
+        },
+        stream: localStream,
+        isLocal: true,
+        tileId: 'self',
+      });
+    } else {
+      allTiles.push({
+        participant: selfParticipant,
+        stream: localStream,
+        isLocal: true,
+        tileId: 'self',
+      });
+    }
   }
 
   participants.forEach((p) => {
@@ -38,16 +65,17 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
       participant: p,
       stream: remoteStreams.get(p.socketId) || null,
       isLocal: false,
+      tileId: p.socketId,
     });
   });
 
   const totalCount = allTiles.length;
 
   const screenShareTile = allTiles.find((t) => t.participant.isScreenSharing);
-  const effectivePinnedId = pinnedId || (screenShareTile ? (screenShareTile.isLocal ? 'self' : screenShareTile.participant.socketId) : null);
+  const effectivePinnedId = pinnedId || (screenShareTile ? screenShareTile.tileId : null);
 
   const pinnedTile = effectivePinnedId
-    ? allTiles.find((t) => (t.isLocal ? effectivePinnedId === 'self' : t.participant.socketId === effectivePinnedId))
+    ? allTiles.find((t) => t.tileId === effectivePinnedId)
     : null;
 
   if (pinnedTile && (layoutMode === 'speaker' || effectivePinnedId)) {
@@ -69,7 +97,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
         {sideTiles.length > 0 && (
           <div className="lg:w-72 flex lg:flex-col gap-3 overflow-x-auto lg:overflow-y-auto shrink-0 max-h-48 lg:max-h-full">
             {sideTiles.map((tile) => {
-              const tileId = tile.isLocal ? 'self' : tile.participant.socketId;
+              const tileId = tile.tileId;
               return (
                 <div key={tileId} className="w-48 lg:w-full h-28 lg:h-44 shrink-0">
                   <VideoTile
@@ -103,7 +131,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   return (
     <div className={`w-full h-full p-3 sm:p-4 grid ${gridClasses} gap-3 auto-rows-fr overflow-hidden`}>
       {allTiles.map((tile) => {
-        const tileId = tile.isLocal ? 'self' : tile.participant.socketId;
+        const tileId = tile.tileId;
         return (
           <div key={tileId} className="w-full h-full min-h-0">
             <VideoTile

@@ -223,7 +223,11 @@ export class WebRTCManager {
    */
   async startScreenShare(): Promise<MediaStream> {
     const screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
+      video: {
+        frameRate: { ideal: 30, max: 60 },
+        width: { ideal: 1920, max: 3840 },
+        height: { ideal: 1080, max: 2160 },
+      },
       audio: true,
     });
 
@@ -235,6 +239,8 @@ export class WebRTCManager {
       const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
       if (sender) {
         sender.replaceTrack(videoTrack);
+      } else {
+        pc.addTrack(videoTrack, screenStream);
       }
     });
 

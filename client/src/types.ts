@@ -9,6 +9,13 @@ export interface User {
   allowedLinkQuota?: number;
 }
 
+export interface WaitingParticipant {
+  socketId: string;
+  userId: string;
+  displayName: string;
+  requestedAt: string;
+}
+
 export interface Participant {
   socketId: string;
   userId: string;

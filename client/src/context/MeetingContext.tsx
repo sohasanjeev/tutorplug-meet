@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { Participant, ChatMessage, FloatingReaction, LayoutMode } from '../types.js';
+import type { Participant, ChatMessage, FloatingReaction, LayoutMode, WaitingParticipant } from '../types.js';
 import { WebRTCManager } from '../services/webrtc.js';
 import { RecordingStreamer } from '../services/recordingStreamer.js';
 
@@ -10,6 +10,7 @@ interface MeetingContextType {
   meetingTitle: string | null;
   isInMeeting: boolean;
   localStream: MediaStream | null;
+  screenStream: MediaStream | null;
   remoteStreams: Map<string, MediaStream>;
   participants: Participant[];
   selfParticipant: Participant | null;
@@ -27,6 +28,8 @@ interface MeetingContextType {
   layoutMode: LayoutMode;
   pinnedId: string | null;
   hasRecordedNoticeDismissed: boolean;
+  waitingStatus: 'none' | 'asking_to_join' | 'host_not_present' | 'denied';
+  waitingParticipants: WaitingParticipant[];
   setHasRecordedNoticeDismissed: (val: boolean) => void;
   setActiveDrawer: (drawer: 'none' | 'chat' | 'people' | 'info' | 'host') => void;
   setLayoutMode: (mode: LayoutMode) => void;
@@ -38,6 +41,10 @@ interface MeetingContextType {
   toggleHandRaise: () => void;
   sendReaction: (emoji: string) => void;
   sendChatMessage: (content?: string, fileData?: any) => void;
+  admitParticipant: (socketId: string) => void;
+  denyParticipant: (socketId: string, reason?: string) => void;
+  admitAll: () => void;
+  cancelWaiting: () => void;
   hostMuteUser: (targetSocketId: string) => void;
   hostMuteAll: () => void;
   hostKickUser: (targetSocketId: string) => void;
@@ -53,6 +60,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [meetingTitle, setMeetingTitle] = useState<string | null>(null);
   const [isInMeeting, setIsInMeeting] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [selfParticipant, setSelfParticipant] = useState<Participant | null>(null);
@@ -62,6 +70,10 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
+
+  // Waiting room & Host Admission State
+  const [waitingStatus, setWaitingStatus] = useState<'none' | 'asking_to_join' | 'host_not_present' | 'denied'>('none');
+  const [waitingParticipants, setWaitingParticipants] = useState<WaitingParticipant[]>([]);
 
   // Automatic Continuous Recording State
   const [isRecording, setIsRecording] = useState(true);
@@ -174,6 +186,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     newSocket.on('room-joined', (data) => {
+      setWaitingStatus('none');
       setMeetingCode(data.meetingCode);
       setMeetingTitle(data.meetingTitle);
       setSelfParticipant(data.self);
@@ -277,6 +290,31 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setParticipants((prev) => prev.filter((p) => p.socketId !== data.socketId));
       setActiveSpeakerId((curr) => (curr === data.socketId ? null : curr));
     });
+
+    // --- Waiting Room / Admission Handlers ---
+    newSocket.on('waiting-admission', (data: { status: string; meetingTitle: string }) => {
+      if (data.status === 'host_not_present') {
+        setWaitingStatus('host_not_present');
+      } else {
+        setWaitingStatus('asking_to_join');
+      }
+      setMeetingTitle(data.meetingTitle);
+    });
+
+    newSocket.on('join-denied', () => {
+      setWaitingStatus('denied');
+    });
+
+    newSocket.on('join-request', (data: WaitingParticipant) => {
+      setWaitingParticipants((prev) => {
+        if (prev.some((p) => p.socketId === data.socketId)) return prev;
+        return [...prev, data];
+      });
+    });
+
+    newSocket.on('waiting-list-updated', (list: WaitingParticipant[]) => {
+      setWaitingParticipants(list);
+    });
   };
 
   const toggleAudio = () => {
@@ -306,14 +344,18 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (!isScreenSharing) {
       try {
-        const screenStream = await webrtcManagerRef.current.startScreenShare();
+        const stream = await webrtcManagerRef.current.startScreenShare();
         setIsScreenSharing(true);
-        recordingStreamerRef.current?.updateMedia({ screenStream });
+        setScreenStream(stream);
+        setSelfParticipant((prev) => (prev ? { ...prev, isScreenSharing: true } : null));
+        recordingStreamerRef.current?.updateMedia({ screenStream: stream });
         if (socket) socket.emit('media-state', { isScreenSharing: true });
 
-        screenStream.getVideoTracks()[0].onended = () => {
+        stream.getVideoTracks()[0].onended = () => {
           webrtcManagerRef.current?.stopScreenShare();
           setIsScreenSharing(false);
+          setScreenStream(null);
+          setSelfParticipant((prev) => (prev ? { ...prev, isScreenSharing: false } : null));
           recordingStreamerRef.current?.updateMedia({ screenStream: null });
           if (socket) socket.emit('media-state', { isScreenSharing: false });
         };
@@ -323,6 +365,8 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } else {
       webrtcManagerRef.current.stopScreenShare();
       setIsScreenSharing(false);
+      setScreenStream(null);
+      setSelfParticipant((prev) => (prev ? { ...prev, isScreenSharing: false } : null));
       recordingStreamerRef.current?.updateMedia({ screenStream: null });
       if (socket) socket.emit('media-state', { isScreenSharing: false });
     }
@@ -363,6 +407,36 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (socket) socket.emit('host-kick-participant', { targetSocketId });
   };
 
+  const admitParticipant = (targetSocketId: string) => {
+    if (socket) {
+      socket.emit('admit-participant', { targetSocketId });
+      setWaitingParticipants((prev) => prev.filter((p) => p.socketId !== targetSocketId));
+    }
+  };
+
+  const denyParticipant = (targetSocketId: string, reason?: string) => {
+    if (socket) {
+      socket.emit('deny-participant', { targetSocketId, reason });
+      setWaitingParticipants((prev) => prev.filter((p) => p.socketId !== targetSocketId));
+    }
+  };
+
+  const admitAll = () => {
+    if (socket) {
+      socket.emit('admit-all');
+      setWaitingParticipants([]);
+    }
+  };
+
+  const cancelWaiting = () => {
+    if (socket) {
+      socket.emit('cancel-waiting');
+      socket.disconnect();
+      setSocket(null);
+    }
+    setWaitingStatus('none');
+  };
+
   const hostEndMeetingForAll = () => {
     if (socket) socket.emit('host-end-meeting-all');
     leaveMeeting();
@@ -381,11 +455,17 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       localStream.getTracks().forEach((t) => t.stop());
       setLocalStream(null);
     }
+    if (screenStream) {
+      screenStream.getTracks().forEach((t) => t.stop());
+      setScreenStream(null);
+    }
     if (socket) {
       socket.disconnect();
       setSocket(null);
     }
     setIsInMeeting(false);
+    setWaitingStatus('none');
+    setWaitingParticipants([]);
     setParticipants([]);
     setRemoteStreams(new Map());
     setMeetingCode(null);
@@ -404,6 +484,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         meetingTitle,
         isInMeeting,
         localStream,
+        screenStream,
         remoteStreams,
         participants,
         selfParticipant,
@@ -421,6 +502,8 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         layoutMode,
         pinnedId,
         hasRecordedNoticeDismissed,
+        waitingStatus,
+        waitingParticipants,
         setHasRecordedNoticeDismissed,
         setActiveDrawer,
         setLayoutMode,
@@ -432,6 +515,10 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         toggleHandRaise,
         sendReaction,
         sendChatMessage,
+        admitParticipant,
+        denyParticipant,
+        admitAll,
+        cancelWaiting,
         hostMuteUser,
         hostMuteAll,
         hostKickUser,

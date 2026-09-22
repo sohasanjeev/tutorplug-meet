@@ -164,16 +164,57 @@ meetingsRouter.get('/user/:userId/links', (req: Request, res: Response) => {
 // 4. Lookup meeting by code (validate before join)
 meetingsRouter.get('/code/:code', (req: Request, res: Response) => {
   try {
-    const code = req.params.code.toLowerCase();
-    const meeting: any = db.prepare('SELECT * FROM meetings WHERE code = ?').get(code);
+    const code = req.params.code.toLowerCase().trim();
+    let meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(code);
+
+    // 1. If not found in meetings table, check if any user owns this permanent room code
+    if (!meeting) {
+      const userWithCode: any = db.prepare('SELECT * FROM users WHERE LOWER(personal_meeting_code) = ?').get(code);
+      if (userWithCode) {
+        const ensured = ensureUserPersonalRoom(userWithCode.id, userWithCode.name);
+        meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(ensured.meetingId);
+      }
+    }
+
+    // 2. If still not found, check if requesting user is authenticated or if it's a valid tp-* permanent room code
+    if (!meeting) {
+      const authUser = getAuthUser(req);
+      if (authUser && code.startsWith('tp-')) {
+        const meetingId = uuidv4();
+        const roomTitle = `${authUser.name}'s Permanent Tutoring Room`;
+        db.prepare(`
+          INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
+          VALUES (?, ?, ?, 'Permanent Tutoring Room for TutorPlug', ?, 'active', 1)
+        `).run(meetingId, code, roomTitle, authUser.id);
+        meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(meetingId);
+      } else if (code.startsWith('tp-')) {
+        // Auto-provision permanent room for tutor by name slug so students can join reliably
+        const parts = code.split('-');
+        const rawName = parts[1] || 'Tutor';
+        const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+        const meetingId = uuidv4();
+        const placeholderHostId = `host_${uuidv4().slice(0, 8)}`;
+        
+        // Find if user with matching name prefix exists
+        const matchedUser: any = db.prepare('SELECT id, name FROM users WHERE LOWER(name) LIKE ? LIMIT 1').get(`%${rawName}%`);
+        const hostId = matchedUser ? matchedUser.id : placeholderHostId;
+        const hostName = matchedUser ? matchedUser.name : formattedName;
+
+        db.prepare(`
+          INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
+          VALUES (?, ?, ?, 'Permanent Tutoring Room for TutorPlug', ?, 'active', 1)
+        `).run(meetingId, code, `${hostName}'s Tutoring Room`, hostId);
+        meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(meetingId);
+      }
+    }
 
     if (!meeting) {
       res.status(404).json({ error: 'Meeting code not found. Please verify the link or code.' });
       return;
     }
 
-    // If permanent room, reset status to active if was ended so it can be reused perpetually
-    if (meeting.is_permanent && meeting.status === 'ended') {
+    // If permanent room or active room, ensure status is active so it can be used perpetually
+    if (meeting.is_permanent && meeting.status !== 'active') {
       db.prepare("UPDATE meetings SET status = 'active' WHERE id = ?").run(meeting.id);
       meeting.status = 'active';
     }

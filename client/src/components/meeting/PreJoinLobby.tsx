@@ -24,7 +24,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
   onBack,
 }) => {
   const { user } = useAuth();
-  const { joinRoom } = useMeeting();
+  const { joinRoom, waitingStatus, cancelWaiting } = useMeeting();
 
   const [displayName, setDisplayName] = useState(user?.name || '');
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
@@ -34,6 +34,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
   const [audioLevel, setAudioLevel] = useState(0);
   const [isJoining, setIsJoining] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [meetingHostId, setMeetingHostId] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -43,8 +44,18 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
       try {
         const res = await api.getMeetingByCode(meetingCode);
         setMeetingTitle(res.meeting.title || 'TutorPlug Tutoring Room');
+        setMeetingHostId(res.meeting.host_id || null);
+        setErrorMessage(null);
       } catch (err: any) {
-        setErrorMessage(err.message || 'Meeting code invalid or expired');
+        // For any tp-* format code, provide a friendly default title and NEVER show red error
+        if (meetingCode.toLowerCase().startsWith('tp-')) {
+          const rawName = meetingCode.split('-')[1] || 'Tutor';
+          const cleanName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+          setMeetingTitle(`${cleanName}'s Tutoring Room`);
+          setErrorMessage(null);
+        } else {
+          setErrorMessage(err.message || 'Meeting code invalid or expired');
+        }
       }
     }
     checkMeeting();
@@ -115,21 +126,32 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
 
   const handleJoin = async () => {
     const finalName = displayName.trim() || 'Guest Participant';
+    const isHost = Boolean(user && (user.id === meetingHostId || user.role === 'admin'));
+    const role = isHost ? 'host' : 'participant';
     try {
       setIsJoining(true);
       if (previewStream) {
         previewStream.getTracks().forEach((t) => t.stop());
       }
-      await joinRoom(meetingCode, finalName, 'participant', {
+      await joinRoom(meetingCode, finalName, role, {
         audio: isAudioEnabled,
         video: isVideoEnabled,
       });
-      onJoinComplete();
+      if (isHost) {
+        onJoinComplete();
+      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to enter conference');
       setIsJoining(false);
     }
   };
+
+  // When admitted by host, automatically enter meeting room
+  useEffect(() => {
+    if (isJoining && waitingStatus === 'none') {
+      onJoinComplete();
+    }
+  }, [waitingStatus, isJoining, onJoinComplete]);
 
   return (
     <div className="min-h-screen bg-[#131314] text-white flex flex-col justify-between p-4 sm:p-8 select-none">
@@ -211,7 +233,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
         <div className="lg:col-span-5 flex flex-col space-y-6 max-w-md mx-auto lg:mx-0 w-full">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mb-2">
-              Ready to join?
+              {waitingStatus !== 'none' ? 'Tutoring Room' : 'Ready to join?'}
             </h1>
             <p className="text-base text-gray-300 font-medium">{meetingTitle}</p>
           </div>
@@ -222,42 +244,109 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
             </div>
           )}
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Your Display Name
-            </label>
-            <input
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="What's your name?"
-              className="w-full bg-[#202124] border border-[#3c4043] rounded-2xl px-4 py-3 text-sm text-white focus:border-blue-500 focus:outline-none transition-colors"
-            />
-          </div>
-
-          <div className="bg-gradient-to-br from-red-950/40 via-red-900/20 to-[#202124] border border-red-500/40 rounded-2xl p-4 space-y-2 shadow-lg">
-            <div className="flex items-center space-x-2 text-red-400 text-xs font-bold uppercase tracking-wider">
-              <span className="w-2.5 h-2.5 rounded-full bg-red-500 rec-dot" />
-              <span>Automatic Recording Active</span>
+          {waitingStatus === 'asking_to_join' && (
+            <div className="bg-[#1a1f2c] border border-orange-500/30 rounded-3xl p-6 text-center space-y-4 shadow-xl">
+              <div className="w-14 h-14 rounded-full bg-orange-500/10 border border-orange-500/30 flex items-center justify-center mx-auto">
+                <div className="w-6 h-6 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-white">Asking to join...</h2>
+                <p className="text-xs text-gray-300 mt-1 leading-relaxed">
+                  You will enter the tutoring session automatically as soon as the host admits you.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  cancelWaiting();
+                  setIsJoining(false);
+                }}
+                className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 text-xs font-semibold transition-all cursor-pointer"
+              >
+                Cancel Request
+              </button>
             </div>
-            <p className="text-xs text-gray-200 leading-relaxed font-medium">
-              "This meeting is automatically recorded and the recording will be stored for future access."
-            </p>
-            <p className="text-[11px] text-gray-400">
-              Audio, video, chat transcript, and shared files will be archived securely.
-            </p>
-          </div>
+          )}
 
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
-            <button
-              onClick={handleJoin}
-              disabled={isJoining}
-              className="flex-1 py-3.5 px-6 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm transition-all shadow-lg hover:shadow-blue-600/30 disabled:opacity-50 flex items-center justify-center space-x-2"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>{isJoining ? 'Connecting...' : 'Join now'}</span>
-            </button>
-          </div>
+          {waitingStatus === 'host_not_present' && (
+            <div className="bg-[#1a1f2c] border border-amber-500/30 rounded-3xl p-6 text-center space-y-4 shadow-xl">
+              <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto">
+                <div className="w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-white">Waiting for Host...</h2>
+                <p className="text-xs text-gray-300 mt-1 leading-relaxed">
+                  The host has not started the session yet. You will be placed in line for admission once the class begins.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  cancelWaiting();
+                  setIsJoining(false);
+                }}
+                className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 text-xs font-semibold transition-all cursor-pointer"
+              >
+                Cancel Request
+              </button>
+            </div>
+          )}
+
+          {waitingStatus === 'denied' && (
+            <div className="bg-red-950/40 border border-red-500/40 rounded-3xl p-6 text-center space-y-4 shadow-xl">
+              <div>
+                <h2 className="text-lg font-bold text-red-300">Admission Denied</h2>
+                <p className="text-xs text-gray-300 mt-1 leading-relaxed">
+                  The host did not admit you to this tutoring session.
+                </p>
+              </div>
+              <button
+                onClick={onBack}
+                className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-200 text-xs font-semibold transition-all cursor-pointer"
+              >
+                Return Home
+              </button>
+            </div>
+          )}
+
+          {waitingStatus === 'none' && (
+            <>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                  Your Display Name
+                </label>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="What's your name?"
+                  className="w-full bg-[#202124] border border-[#3c4043] rounded-2xl px-4 py-3 text-sm text-white focus:border-blue-500 focus:outline-none transition-colors"
+                />
+              </div>
+
+              <div className="bg-gradient-to-br from-red-950/40 via-red-900/20 to-[#202124] border border-red-500/40 rounded-2xl p-4 space-y-2 shadow-lg">
+                <div className="flex items-center space-x-2 text-red-400 text-xs font-bold uppercase tracking-wider">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 rec-dot" />
+                  <span>Automatic Recording Active</span>
+                </div>
+                <p className="text-xs text-gray-200 leading-relaxed font-medium">
+                  "This meeting is automatically recorded and the recording will be stored for future access."
+                </p>
+                <p className="text-[11px] text-gray-400">
+                  Audio, video, chat transcript, and shared files will be archived securely.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <button
+                  onClick={handleJoin}
+                  disabled={isJoining}
+                  className="flex-1 py-3.5 px-6 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-black font-bold text-sm transition-all shadow-lg hover:shadow-orange-500/30 disabled:opacity-50 flex items-center justify-center space-x-2 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-black" />
+                  <span>{isJoining ? 'Connecting...' : 'Join now'}</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

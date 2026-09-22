@@ -25,17 +25,20 @@ export const VideoTile: React.FC<VideoTileProps> = ({
     if (videoRef.current) {
       if (stream) {
         videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
       } else {
         videoRef.current.srcObject = null;
       }
     }
   }, [stream]);
 
-  const hasVideo = participant.videoEnabled && stream && stream.getVideoTracks().some((t) => t.enabled);
+  const isSharing = Boolean(participant.isScreenSharing);
+  const hasLiveVideoTrack = Boolean(stream && stream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live'));
+  const hasVideo = (participant.videoEnabled || isSharing) && hasLiveVideoTrack;
 
   return (
     <div
-      className={`relative w-full h-full bg-[#202124] rounded-2xl overflow-hidden border border-[#3c4043] flex items-center justify-center transition-all duration-200 group select-none shadow-md ${
+      className={`relative w-full h-full bg-[#18191d] rounded-2xl overflow-hidden border border-[#3c4043] flex items-center justify-center transition-all duration-200 group select-none shadow-md ${
         isActiveSpeaker ? 'active-speaker-ring ring-offset-2 ring-offset-[#131314]' : ''
       }`}
     >
@@ -44,8 +47,10 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         autoPlay
         playsInline
         muted={isLocal}
-        className={`w-full h-full object-cover ${
-          isLocal && !participant.isScreenSharing ? 'mirror' : ''
+        className={`w-full h-full ${
+          isSharing ? 'object-contain bg-black' : 'object-cover'
+        } ${
+          isLocal && !isSharing ? 'mirror' : ''
         } ${hasVideo ? 'block' : 'hidden'}`}
       />
 

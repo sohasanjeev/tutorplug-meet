@@ -8,6 +8,7 @@ import { ChatPanel } from './ChatPanel.js';
 import { ParticipantsPanel } from './ParticipantsPanel.js';
 import { MeetingInfoDrawer } from './MeetingInfoDrawer.js';
 import { HostControlsDrawer } from './HostControlsDrawer.js';
+import { AdmissionPrompt } from './AdmissionPrompt.js';
 
 export const MeetingRoom: React.FC = () => {
   const {
@@ -15,6 +16,7 @@ export const MeetingRoom: React.FC = () => {
     meetingCode,
     selfParticipant,
     localStream,
+    screenStream,
     participants,
     remoteStreams,
     activeSpeakerId,
@@ -30,6 +32,9 @@ export const MeetingRoom: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen bg-[#131314] flex flex-col overflow-hidden select-none">
+      {/* Host Admission Notification Modal / Toast */}
+      <AdmissionPrompt />
+
       {/* 1. Privacy Recording Consent Banner (Top) */}
       {!hasRecordedNoticeDismissed && (
         <ConsentBanner onDismiss={() => setHasRecordedNoticeDismissed(true)} />
@@ -65,6 +70,7 @@ export const MeetingRoom: React.FC = () => {
           <VideoGrid
             selfParticipant={selfParticipant}
             localStream={localStream}
+            screenStream={screenStream}
             participants={participants}
             remoteStreams={remoteStreams}
             activeSpeakerId={activeSpeakerId}
