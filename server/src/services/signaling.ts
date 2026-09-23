@@ -121,7 +121,8 @@ export function setupSignaling(io: Server) {
 
     // --- 1. Join Room (With Host Admission & Knocking Control) ---
     socket.on('join-room', (data: any) => {
-      const meetingCode = (data?.meetingCode || data?.roomId || '').trim();
+      try {
+        const meetingCode = (data?.meetingCode || data?.roomId || '').trim();
       const displayName = data?.displayName || data?.userName || 'Participant';
       const userId = data?.userId || uuidv4();
       const requestedRole = (data?.role as any) || (data?.isHost ? 'host' : 'participant');
@@ -230,6 +231,9 @@ export function setupSignaling(io: Server) {
         }
       } else {
         // NON-HOST PARTICIPANT (STUDENT / GUEST): ENTERS WAITING ROOM (KNOCKING)
+        (socket as any).currentMeetingCode = meetingCode;
+        socketToRoomMap.set(socket.id, meetingCode);
+
         if (!waitingRooms.has(meetingCode)) {
           waitingRooms.set(meetingCode, new Map());
         }
@@ -267,7 +271,11 @@ export function setupSignaling(io: Server) {
           });
         }
       }
-    });
+    } catch (err: any) {
+      console.error('[Signaling] Error in join-room handler:', err);
+      socket.emit('error', { message: err?.message || 'Error processing meeting join request' });
+    }
+  });
 
     // --- Host Admission Control Handlers ---
     socket.on('admit-participant', (data: any) => {
@@ -326,6 +334,13 @@ export function setupSignaling(io: Server) {
         waitingRooms.get(roomCode)!.delete(socket.id);
         broadcastWaitingList(roomCode);
       }
+      for (const [wCode, wMap] of waitingRooms.entries()) {
+        if (wMap.has(socket.id)) {
+          wMap.delete(socket.id);
+          broadcastWaitingList(wCode);
+        }
+      }
+      socketToRoomMap.delete(socket.id);
     });
 
     // --- 2. WebRTC Peer Signaling Relay (Offer, Answer, ICE Candidate) ---
@@ -505,12 +520,20 @@ export function setupSignaling(io: Server) {
       const roomCode = getSocketRoom(socket);
       const mId = getSocketMeetingId(socket);
 
-      // Check if user was waiting in waiting room
+      // Clean up from all waiting rooms
       if (roomCode && waitingRooms.has(roomCode)) {
         if (waitingRooms.get(roomCode)!.delete(socket.id)) {
           broadcastWaitingList(roomCode);
         }
       }
+      for (const [wCode, wMap] of waitingRooms.entries()) {
+        if (wMap.has(socket.id)) {
+          wMap.delete(socket.id);
+          broadcastWaitingList(wCode);
+        }
+      }
+      socketToRoomMap.delete(socket.id);
+      socketToMeetingIdMap.delete(socket.id);
 
       if (roomCode && rooms.has(roomCode)) {
         const roomParticipants = rooms.get(roomCode)!;

@@ -39,6 +39,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const hasJoinedRef = useRef(false);
 
   useEffect(() => {
     async function checkMeeting() {
@@ -105,7 +106,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (audioContext) audioContext.close();
-      if (localMediaStream) {
+      if (localMediaStream && !hasJoinedRef.current) {
         localMediaStream.getTracks().forEach((t) => t.stop());
       }
     };
@@ -164,30 +165,47 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
     const role = effectiveIsHost ? 'host' : 'participant';
     try {
       setIsJoining(true);
-      if (previewStream) {
-        previewStream.getTracks().forEach((t) => t.stop());
-      }
-      await joinRoom(meetingCode, finalName, role, {
-        audio: isAudioEnabled,
-        video: isVideoEnabled,
-      }, user?.id);
+      setErrorMessage(null);
+      await joinRoom(
+        meetingCode,
+        finalName,
+        role,
+        {
+          audio: isAudioEnabled,
+          video: isVideoEnabled,
+        },
+        user?.id,
+        previewStream
+      );
+      hasJoinedRef.current = true;
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to enter conference');
+      console.error('[PreJoinLobby] Join error:', err);
+      setErrorMessage(err.message || 'Failed to enter conference. Please try again.');
+    } finally {
       setIsJoining(false);
     }
   };
 
-  const handleJoinAsHost = () => {
+  const handleJoinAsHost = async () => {
     setIsHostOverride(true);
     cancelWaiting();
-    handleJoin(true);
+    await handleJoin(true);
+  };
+
+  const handleBack = () => {
+    hasJoinedRef.current = false;
+    cancelWaiting();
+    if (previewStream) {
+      previewStream.getTracks().forEach((t) => t.stop());
+    }
+    onBack();
   };
 
   return (
     <div className="min-h-screen bg-[#131314] text-white flex flex-col justify-between p-4 sm:p-8 select-none">
       <div className="flex items-center justify-between max-w-6xl w-full mx-auto">
         <button
-          onClick={onBack}
+          onClick={handleBack}
           className="flex items-center space-x-2 text-gray-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />
@@ -295,6 +313,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
                 </button>
                 <button
                   onClick={() => {
+                    hasJoinedRef.current = false;
                     cancelWaiting();
                     setIsJoining(false);
                   }}
@@ -327,6 +346,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
                 </button>
                 <button
                   onClick={() => {
+                    hasJoinedRef.current = false;
                     cancelWaiting();
                     setIsJoining(false);
                   }}
@@ -347,7 +367,7 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
                 </p>
               </div>
               <button
-                onClick={onBack}
+                onClick={handleBack}
                 className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-200 text-xs font-semibold transition-all cursor-pointer"
               >
                 Return Home

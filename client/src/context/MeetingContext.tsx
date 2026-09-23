@@ -40,7 +40,8 @@ interface MeetingContextType {
     displayName: string,
     role?: string,
     initialMedia?: { audio: boolean; video: boolean },
-    customUserId?: string
+    customUserId?: string,
+    existingStream?: MediaStream | null
   ) => Promise<void>;
   toggleAudio: () => void;
   toggleVideo: () => void;
@@ -123,20 +124,25 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     displayName: string,
     role = 'participant',
     initialMedia = { audio: true, video: true },
-    customUserId?: string
-  ) => {
-    // 1. Initialize user media
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      });
-    } catch {
+    customUserId?: string,
+    existingStream?: MediaStream | null
+  ): Promise<void> => {
+    // 1. Initialize user media (reuse existing preview stream if available to prevent webcam driver lockup)
+    let stream: MediaStream | null = null;
+    if (existingStream && existingStream.getTracks().length > 0 && existingStream.getTracks().some((t) => t.readyState === 'live')) {
+      stream = existingStream;
+    } else {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        });
       } catch {
-        stream = new MediaStream();
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+          stream = new MediaStream();
+        }
       }
     }
 
@@ -156,14 +162,34 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setLocalStream(stream);
 
-    // 2. Connect Socket.io
+    // 2. Disconnect any existing socket cleanly before establishing new connection
+    if (socket) {
+      try {
+        socket.removeAllListeners();
+        socket.disconnect();
+      } catch {}
+      setSocket(null);
+    }
+    if (webrtcManagerRef.current) {
+      try {
+        webrtcManagerRef.current.destroy();
+      } catch {}
+      webrtcManagerRef.current = null;
+    }
+
+    // 3. Connect Socket.io with reliable transport fallback & fresh connection
     const socketServerUrl = import.meta.env.VITE_API_URL || window.location.origin;
     const newSocket = io(socketServerUrl, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
+      forceNew: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 12000,
     });
     setSocket(newSocket);
 
-    // 3. Setup WebRTC Manager
+    // 4. Setup WebRTC Manager
     const rtcManager = new WebRTCManager(
       newSocket,
       (socketId, remoteStream) => {
@@ -185,145 +211,201 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     rtcManager.setLocalStream(stream);
     webrtcManagerRef.current = rtcManager;
 
-    // 4. Socket Listeners
-    newSocket.on('connect', () => {
-      newSocket.emit('join-room', {
-        meetingCode: code,
-        displayName,
-        role,
-        userId: customUserId || user?.id,
-      });
-    });
+    // 5. Return a Promise that resolves when room-joined or waiting-admission is received, or rejects on error/timeout
+    return new Promise<void>((resolve, reject) => {
+      let isSettled = false;
 
-    newSocket.on('room-joined', (data) => {
-      setWaitingStatus('none');
-      setMeetingCode(data.meetingCode);
-      setMeetingTitle(data.meetingTitle);
-      setSelfParticipant(data.self);
-      setParticipants(data.participants);
-      setIsInMeeting(true);
-
-      if (data.recording?.isRecording) {
-        setIsRecording(true);
-      }
-
-      // Initialize live composite recording stream to server
-      const streamer = new RecordingStreamer(newSocket);
-      streamer.updateMedia({
-        localStream: stream,
-        tutorName: displayName,
-        meetingTitle: data.meetingTitle,
-      });
-      recordingStreamerRef.current = streamer;
-      streamer.start();
-
-      data.participants.forEach((p: Participant) => {
-        rtcManager.createPeerConnection(p.socketId, true);
-      });
-    });
-
-    newSocket.on('user-connected', (participant: Participant) => {
-      setParticipants((prev) => [...prev.filter((p) => p.socketId !== participant.socketId), participant]);
-    });
-
-    newSocket.on('signal', (data) => {
-      rtcManager.handleSignal(data.from, data.signal);
-    });
-
-    newSocket.on('participant-media-changed', (data) => {
-      setParticipants((prev) =>
-        prev.map((p) => (p.socketId === data.socketId ? { ...p, ...data } : p))
-      );
-    });
-
-    newSocket.on('active-speaker', (data) => {
-      if (data.level > 15) {
-        setActiveSpeakerId(data.socketId);
-      } else {
-        setActiveSpeakerId((current) => (current === data.socketId ? null : current));
-      }
-    });
-
-    newSocket.on('hand-raise-updated', (data) => {
-      setParticipants((prev) =>
-        prev.map((p) => (p.socketId === data.socketId ? { ...p, isHandRaised: data.isRaised } : p))
-      );
-    });
-
-    newSocket.on('reaction-received', (data) => {
-      const newReaction: FloatingReaction = {
-        id: data.id,
-        emoji: data.emoji,
-        senderName: data.senderName,
-        x: Math.floor(Math.random() * 60) + 20,
-      };
-      setReactions((prev) => [...prev, newReaction]);
-      setTimeout(() => {
-        setReactions((prev) => prev.filter((r) => r.id !== data.id));
-      }, 2500);
-    });
-
-    newSocket.on('chat-message', (msg: ChatMessage) => {
-      setMessages((prev) => [...prev, msg]);
-      setActiveDrawer((currentDrawer) => {
-        if (currentDrawer !== 'chat') {
-          setUnreadMessageCount((c) => c + 1);
+      const timeoutTimer = setTimeout(() => {
+        if (!isSettled) {
+          isSettled = true;
+          reject(new Error('Connection timed out. The meeting server did not respond within 12 seconds.'));
         }
-        return currentDrawer;
-      });
-    });
+      }, 12000);
 
-    newSocket.on('recording:status', (status) => {
-      setIsRecording(status.isRecording);
-    });
+      const safeResolve = () => {
+        if (!isSettled) {
+          isSettled = true;
+          clearTimeout(timeoutTimer);
+          resolve();
+        }
+      };
 
-    newSocket.on('host-instructed-mute', () => {
-      if (stream) {
-        stream.getAudioTracks().forEach((t) => (t.enabled = false));
-        setIsAudioMuted(true);
-        newSocket.emit('media-state', { audioEnabled: false });
-      }
-    });
+      const safeReject = (err: Error) => {
+        if (!isSettled) {
+          isSettled = true;
+          clearTimeout(timeoutTimer);
+          reject(err);
+        }
+      };
 
-    newSocket.on('host-kicked-you', () => {
-      alert('You have been removed from the meeting by the host.');
-      leaveMeeting();
-    });
+      const emitJoin = () => {
+        console.log('[MeetingContext] Emitting join-room:', { code, displayName, role });
+        newSocket.emit('join-room', {
+          meetingCode: code.trim().toLowerCase(),
+          displayName: displayName.trim(),
+          role,
+          userId: customUserId || user?.id,
+        });
+      };
 
-    newSocket.on('meeting-ended-by-host', () => {
-      alert('The host has ended the meeting for everyone.');
-      leaveMeeting();
-    });
-
-    newSocket.on('user-disconnected', (data) => {
-      rtcManager.closePeer(data.socketId);
-      setParticipants((prev) => prev.filter((p) => p.socketId !== data.socketId));
-      setActiveSpeakerId((curr) => (curr === data.socketId ? null : curr));
-    });
-
-    // --- Waiting Room / Admission Handlers ---
-    newSocket.on('waiting-admission', (data: { status: string; meetingTitle: string }) => {
-      if (data.status === 'host_not_present') {
-        setWaitingStatus('host_not_present');
+      if (newSocket.connected) {
+        emitJoin();
       } else {
-        setWaitingStatus('asking_to_join');
+        newSocket.on('connect', emitJoin);
       }
-      setMeetingTitle(data.meetingTitle);
-    });
 
-    newSocket.on('join-denied', () => {
-      setWaitingStatus('denied');
-    });
-
-    newSocket.on('join-request', (data: WaitingParticipant) => {
-      setWaitingParticipants((prev) => {
-        if (prev.some((p) => p.socketId === data.socketId)) return prev;
-        return [...prev, data];
+      newSocket.on('connect_error', (err) => {
+        console.error('[MeetingContext] Socket connect_error:', err);
+        safeReject(new Error(`Unable to connect to meeting server (${err.message || 'Network error'})`));
       });
-    });
 
-    newSocket.on('waiting-list-updated', (list: WaitingParticipant[]) => {
-      setWaitingParticipants(list);
+      newSocket.on('error', (err: any) => {
+        console.error('[MeetingContext] Socket error event:', err);
+        safeReject(new Error(err?.message || 'Server returned an error joining meeting'));
+      });
+
+      newSocket.on('meeting:already-ended', (data: any) => {
+        safeReject(new Error(data?.message || 'This meeting has already ended.'));
+      });
+
+      // --- Room Joined Handler ---
+      newSocket.on('room-joined', (data) => {
+        setWaitingStatus('none');
+        setMeetingCode(data.meetingCode);
+        setMeetingTitle(data.meetingTitle);
+        setSelfParticipant(data.self);
+        setParticipants(data.participants);
+        setIsInMeeting(true);
+
+        if (data.recording?.isRecording) {
+          setIsRecording(true);
+        }
+
+        try {
+          const streamer = new RecordingStreamer(newSocket);
+          streamer.updateMedia({
+            localStream: stream,
+            tutorName: displayName,
+            meetingTitle: data.meetingTitle,
+          });
+          recordingStreamerRef.current = streamer;
+          streamer.start();
+        } catch (streamerErr) {
+          console.warn('[MeetingContext] Recording streamer note:', streamerErr);
+        }
+
+        data.participants.forEach((p: Participant) => {
+          rtcManager.createPeerConnection(p.socketId, true);
+        });
+
+        safeResolve();
+      });
+
+      // --- Waiting Room Handlers ---
+      newSocket.on('waiting-admission', (data: { status: string; meetingTitle: string }) => {
+        if (data.status === 'host_not_present') {
+          setWaitingStatus('host_not_present');
+        } else {
+          setWaitingStatus('asking_to_join');
+        }
+        setMeetingTitle(data.meetingTitle);
+        safeResolve();
+      });
+
+      newSocket.on('join-denied', () => {
+        setWaitingStatus('denied');
+        safeResolve();
+      });
+
+      newSocket.on('user-connected', (participant: Participant) => {
+        setParticipants((prev) => [...prev.filter((p) => p.socketId !== participant.socketId), participant]);
+      });
+
+      newSocket.on('signal', (data) => {
+        rtcManager.handleSignal(data.from, data.signal);
+      });
+
+      newSocket.on('participant-media-changed', (data) => {
+        setParticipants((prev) =>
+          prev.map((p) => (p.socketId === data.socketId ? { ...p, ...data } : p))
+        );
+      });
+
+      newSocket.on('active-speaker', (data) => {
+        if (data.level > 15) {
+          setActiveSpeakerId(data.socketId);
+        } else {
+          setActiveSpeakerId((current) => (current === data.socketId ? null : current));
+        }
+      });
+
+      newSocket.on('hand-raise-updated', (data) => {
+        setParticipants((prev) =>
+          prev.map((p) => (p.socketId === data.socketId ? { ...p, isHandRaised: data.isRaised } : p))
+        );
+      });
+
+      newSocket.on('reaction-received', (data) => {
+        const newReaction: FloatingReaction = {
+          id: data.id,
+          emoji: data.emoji,
+          senderName: data.senderName,
+          x: Math.floor(Math.random() * 60) + 20,
+        };
+        setReactions((prev) => [...prev, newReaction]);
+        setTimeout(() => {
+          setReactions((prev) => prev.filter((r) => r.id !== data.id));
+        }, 2500);
+      });
+
+      newSocket.on('chat-message', (msg: ChatMessage) => {
+        setMessages((prev) => [...prev, msg]);
+        setActiveDrawer((currentDrawer) => {
+          if (currentDrawer !== 'chat') {
+            setUnreadMessageCount((c) => c + 1);
+          }
+          return currentDrawer;
+        });
+      });
+
+      newSocket.on('recording:status', (status) => {
+        setIsRecording(status.isRecording);
+      });
+
+      newSocket.on('host-instructed-mute', () => {
+        if (stream) {
+          stream.getAudioTracks().forEach((t) => (t.enabled = false));
+          setIsAudioMuted(true);
+          newSocket.emit('media-state', { audioEnabled: false });
+        }
+      });
+
+      newSocket.on('host-kicked-you', () => {
+        alert('You have been removed from the meeting by the host.');
+        leaveMeeting();
+      });
+
+      newSocket.on('meeting-ended-by-host', () => {
+        alert('The host has ended the meeting for everyone.');
+        leaveMeeting();
+      });
+
+      newSocket.on('user-disconnected', (data) => {
+        rtcManager.closePeer(data.socketId);
+        setParticipants((prev) => prev.filter((p) => p.socketId !== data.socketId));
+        setActiveSpeakerId((curr) => (curr === data.socketId ? null : curr));
+      });
+
+      newSocket.on('join-request', (data: WaitingParticipant) => {
+        setWaitingParticipants((prev) => {
+          if (prev.some((p) => p.socketId === data.socketId)) return prev;
+          return [...prev, data];
+        });
+      });
+
+      newSocket.on('waiting-list-updated', (list: WaitingParticipant[]) => {
+        setWaitingParticipants(list);
+      });
     });
   };
 

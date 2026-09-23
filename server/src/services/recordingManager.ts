@@ -32,8 +32,14 @@ export class RecordingManager {
 
     const recordingId = uuidv4();
     const fileName = `rec_${meetingId}_${Date.now()}.webm`;
+    if (!fs.existsSync(CONFIG.RECORDINGS_DIR)) {
+      fs.mkdirSync(CONFIG.RECORDINGS_DIR, { recursive: true });
+    }
     const filePath = path.join(CONFIG.RECORDINGS_DIR, fileName);
     const writeStream = fs.createWriteStream(filePath, { flags: 'a' });
+    writeStream.on('error', (err) => {
+      console.error(`[RecordingManager] Stream error for meeting ${meetingId}:`, err);
+    });
 
     const session: ActiveRecordingSession = {
       recordingId,
@@ -71,9 +77,13 @@ export class RecordingManager {
     const session = this.sessions.get(meetingId);
     if (!session) return;
 
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    session.writeStream.write(buffer);
-    session.totalBytes += buffer.length;
+    try {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      session.writeStream.write(buffer);
+      session.totalBytes += buffer.length;
+    } catch (err) {
+      console.error(`[RecordingManager] Error writing chunk for ${meetingId}:`, err);
+    }
   }
 
   /**
