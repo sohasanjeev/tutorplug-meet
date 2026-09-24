@@ -13,6 +13,7 @@ import {
   X,
   PlusCircle,
   UserCheck,
+  MessageSquare,
 } from 'lucide-react';
 import { api } from '../../services/api.js';
 import type { LinkRequest } from '../../types.js';
@@ -37,14 +38,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToHome }) 
   const loadData = async () => {
     try {
       setIsLoading(true);
-      const [statsRes, recsRes, requestsRes] = await Promise.all([
+      const [statsRes, recsRes, requestsRes] = await Promise.allSettled([
         api.getAdminStats(),
         api.getAdminRecordings(),
         api.getAdminLinkRequests(),
       ]);
-      setStats(statsRes.stats);
-      setRecordings(recsRes.recordings || []);
-      setLinkRequests(requestsRes.requests || []);
+      if (statsRes.status === 'fulfilled') setStats(statsRes.value.stats);
+      if (recsRes.status === 'fulfilled') setRecordings(recsRes.value.recordings || []);
+      if (requestsRes.status === 'fulfilled') setLinkRequests(requestsRes.value.requests || []);
     } catch (err) {
       console.error('Failed to load admin data:', err);
     } finally {
@@ -314,8 +315,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToHome }) 
                     <tbody className="divide-y divide-white/5">
                       {recordings.map((r) => (
                         <tr key={r.id} className="hover:bg-white/5 transition-colors">
-                          <td className="py-3 font-medium text-white truncate max-w-xs">
-                            {r.meeting_title}
+                          <td className="py-3 font-medium text-white max-w-xs">
+                            <p className="font-semibold text-white truncate">{r.meeting_title || 'Class Session'}</p>
+                            <p className="text-[11px] text-gray-400 truncate">
+                              Tutor: {r.host_name || r.host_email || 'TutorPlug Tutor'}
+                              {r.participant_count ? ` • ${r.participant_count} student(s)` : ''}
+                              {r.message_count ? ` • ${r.message_count} message(s)` : ''}
+                            </p>
                           </td>
                           <td className="py-3 font-mono text-amber-400">{r.meeting_code}</td>
                           <td className="py-3">{r.duration_seconds}s</td>
@@ -325,9 +331,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToHome }) 
                               href={`/api/meetings/${r.meeting_id}/recording/download`}
                               download
                               className="inline-block p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-gray-200"
-                              title="Download recording"
+                              title="Download video recording (.webm)"
                             >
                               <Download className="w-3.5 h-3.5" />
+                            </a>
+                            <a
+                              href={`/api/meetings/${r.meeting_id}/chat/download`}
+                              download
+                              className="inline-block p-1.5 rounded-lg bg-orange-500/10 hover:bg-orange-500/20 text-orange-400"
+                              title="Download recorded chat transcript (.txt)"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
                             </a>
                             <button
                               onClick={() => handleDeleteRecording(r.id)}

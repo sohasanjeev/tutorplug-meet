@@ -1,7 +1,9 @@
+import fs from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { CONFIG } from '../config.js';
+
 
 export const db = new DatabaseSync(CONFIG.DB_PATH);
 
@@ -339,4 +341,27 @@ function seedDefaultUsers() {
   // Enforce strict admin isolation: only designated admin emails retain admin role
   db.prepare("UPDATE users SET role = 'admin', user_type = 'admin' WHERE LOWER(email) IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com')").run();
   db.prepare("UPDATE users SET role = 'teacher', user_type = 'teacher' WHERE LOWER(email) NOT IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com') AND role = 'admin'").run();
+
+  // Finalize any dangling recordings from previous sessions so they appear ready
+  try {
+    const danglingRecordings: any[] = db.prepare("SELECT * FROM recordings WHERE status = 'recording'").all();
+    for (const rec of danglingRecordings) {
+      if (fs.existsSync(rec.file_path)) {
+        const stats = fs.statSync(rec.file_path);
+        db.prepare(`
+          UPDATE recordings
+          SET status = 'ready',
+              size_bytes = ?,
+              duration_seconds = MAX(duration_seconds, 1),
+              ended_at = datetime('now')
+          WHERE id = ?
+        `).run(stats.size, rec.id);
+      } else {
+        db.prepare("UPDATE recordings SET status = 'ready', ended_at = datetime('now') WHERE id = ?").run(rec.id);
+      }
+    }
+  } catch (e) {
+    console.error('Error finalizing dangling recordings:', e);
+  }
 }
+

@@ -194,7 +194,7 @@ adminRouter.post('/users/:userId/quota', (req: Request, res: Response) => {
   }
 });
 
-// 6. Admin List All Recordings
+// 6. Admin List All Recordings (Complete oversight of all clients, students, and teachers' classes)
 adminRouter.get('/recordings', (_req: Request, res: Response) => {
   try {
     const recordings = db.prepare(`
@@ -203,9 +203,14 @@ adminRouter.get('/recordings', (_req: Request, res: Response) => {
         m.code AS meeting_code,
         m.title AS meeting_title,
         m.started_at AS meeting_started_at,
-        m.ended_at AS meeting_ended_at
+        m.ended_at AS meeting_ended_at,
+        u.name AS host_name,
+        u.email AS host_email,
+        (SELECT COUNT(*) FROM meeting_participants WHERE meeting_id = r.meeting_id) AS participant_count,
+        (SELECT COUNT(*) FROM messages WHERE meeting_id = r.meeting_id) AS message_count
       FROM recordings r
-      JOIN meetings m ON m.id = r.meeting_id
+      LEFT JOIN meetings m ON m.id = r.meeting_id
+      LEFT JOIN users u ON u.id = m.host_id
       ORDER BY r.created_at DESC
     `).all();
 

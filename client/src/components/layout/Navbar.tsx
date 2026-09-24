@@ -111,6 +111,18 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenA
 
         <div className="flex items-center space-x-1 text-slate-500 dark:text-gray-400">
           <button
+            onClick={() => onNavigate('admin')}
+            title="Admin Portal (Executive Authorization)"
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+              currentView === 'admin'
+                ? 'bg-amber-500 text-black shadow'
+                : 'hover:bg-amber-500/10 hover:text-amber-500'
+            }`}
+            aria-label="Admin Portal"
+          >
+            <Shield className="w-4 h-4" />
+          </button>
+          <button
             title="Help & Guidelines"
             className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
           >

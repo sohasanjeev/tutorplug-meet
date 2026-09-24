@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useMeeting } from '../../context/MeetingContext.js';
 import type { Participant } from '../../types.js';
 import { RecordingBadge } from './RecordingBadge.js';
-import { ConsentBanner } from './ConsentBanner.js';
+import { MeetingSafetyModal } from './MeetingSafetyModal.js';
 import { VideoGrid } from './VideoGrid.js';
 import { MeetingControls } from './MeetingControls.js';
 import { ChatPanel } from './ChatPanel.js';
@@ -57,9 +57,9 @@ export const MeetingRoom: React.FC = () => {
       {/* Host Admission Notification Modal / Toast */}
       <AdmissionPrompt />
 
-      {/* 1. Privacy Recording Consent Banner (Top) */}
+      {/* 1. Polite 4-Second Learning & Recording Safety Notice Modal */}
       {!hasRecordedNoticeDismissed && (
-        <ConsentBanner onDismiss={() => setHasRecordedNoticeDismissed(true)} />
+        <MeetingSafetyModal onDismiss={() => setHasRecordedNoticeDismissed(true)} />
       )}
 
       {/* 2. Top Meeting Header */}

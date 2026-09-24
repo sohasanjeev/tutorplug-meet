@@ -398,6 +398,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               </button>
             </p>
           )}
+
+
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                window.location.hash = '#/admin';
+              }}
+              className="text-[11px] text-gray-500 hover:text-amber-400 transition-colors cursor-pointer flex items-center justify-center space-x-1 mx-auto"
+            >
+              <span>Looking for Executive Admin Authorization?</span>
+              <span className="font-semibold text-amber-500 underline ml-1">Unlock Admin Portal →</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

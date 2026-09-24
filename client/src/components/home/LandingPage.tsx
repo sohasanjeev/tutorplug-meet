@@ -384,6 +384,29 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
       </div>
 
+      {/* Footer with direct links to Admin Portal & Guidelines */}
+      <footer className="mt-16 pt-8 border-t border-slate-200 dark:border-white/5 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 dark:text-gray-400 gap-4">
+        <div className="flex items-center space-x-2">
+          <span className="font-bold text-slate-700 dark:text-gray-200">TutorPlug</span>
+          <span>• Safe, Recorded Online Classrooms for Dedicated Tutors & Students</span>
+        </div>
+        <div className="flex items-center space-x-4">
+          <a
+            href="#/history"
+            className="hover:text-orange-500 transition-colors"
+          >
+            Class Recordings
+          </a>
+          <a
+            href="#/admin"
+            className="hover:text-amber-500 flex items-center space-x-1 font-semibold transition-colors"
+          >
+            <Shield className="w-3.5 h-3.5 text-amber-500" />
+            <span>Admin Portal</span>
+          </a>
+        </div>
+      </footer>
+
       {/* Request Additional Link Modal */}
       <RequestLinkModal
         isOpen={isRequestModalOpen}

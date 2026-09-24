@@ -15,7 +15,7 @@ import { UserProfileModal } from './components/meeting/UserProfileModal.js';
 import { Shield } from 'lucide-react';
 
 const AdminSecurityGate: React.FC<{ onBackToHome: () => void }> = ({ onBackToHome }) => {
-  const { user, login } = useAuth();
+  const { user, login, logout } = useAuth();
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -50,8 +50,16 @@ const AdminSecurityGate: React.FC<{ onBackToHome: () => void }> = ({ onBackToHom
         </div>
 
         {user && user.role !== 'admin' && (
-          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-500 text-xs text-left">
-            ⚠️ You are signed in as <strong>{user.email}</strong>, which does not have administrative privileges. Please sign in with an executive administrator account.
+          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-500 text-xs text-left space-y-2">
+            <div>
+              ⚠️ You are currently signed in as <strong>{user.email}</strong>, which does not have executive administrator privileges.
+            </div>
+            <button
+              onClick={logout}
+              className="text-xs font-bold text-amber-400 underline hover:text-amber-300 block"
+            >
+              Sign out and sign in with Admin Account →
+            </button>
           </div>
         )}
 
@@ -93,7 +101,7 @@ const AdminSecurityGate: React.FC<{ onBackToHome: () => void }> = ({ onBackToHom
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-bold text-sm transition-all shadow-lg shadow-red-500/20"
+            className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-bold text-sm transition-all shadow-lg shadow-red-500/20 cursor-pointer"
           >
             {isLoading ? 'Verifying Credentials...' : 'Unlock Admin Portal'}
           </button>
@@ -118,40 +126,67 @@ const AppContent: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
-  // Handle URL hash changes for deep linking (e.g., direct join links: /#/meeting/tp-xxx-yyyy)
+  // Handle URL hash and pathname changes for robust deep linking across /admin, /history, and meeting rooms
   useEffect(() => {
-    const handleHash = () => {
-      const hash = window.location.hash;
-      if (hash.startsWith('#/meeting/')) {
-        const code = hash.replace('#/meeting/', '').split('?')[0];
-        if (code) {
-          setActiveCode(code);
+    const handleNavigationCheck = () => {
+      const hash = (window.location.hash || '').toLowerCase();
+      const path = (window.location.pathname || '').toLowerCase();
+
+      // Admin routes: #/admin, #admin, /admin, /admin/
+      if (
+        hash.startsWith('#/admin') ||
+        hash === '#admin' ||
+        path.startsWith('/admin')
+      ) {
+        setCurrentView('admin');
+        return;
+      }
+
+      // History / Recordings routes: #/history, #history, /history, /history/
+      if (
+        hash.startsWith('#/history') ||
+        hash === '#history' ||
+        path.startsWith('/history')
+      ) {
+        setCurrentView('history');
+        return;
+      }
+
+      // Meeting deep links: #/meeting/code or /meeting/code
+      if (hash.startsWith('#/meeting/') || path.startsWith('/meeting/')) {
+        const rawCode = (hash.replace('#/meeting/', '') || path.replace('/meeting/', '')).split('?')[0].split('/')[0];
+        if (rawCode) {
+          setActiveCode(rawCode);
           if (!isInMeeting) {
             setCurrentView('lobby');
           } else {
             setCurrentView('meeting');
           }
+          return;
         }
-      } else if (hash.startsWith('#/join/')) {
-        const code = hash.replace('#/join/', '').split('?')[0];
-        if (code) {
-          setActiveCode(code);
+      }
+
+      if (hash.startsWith('#/join/') || path.startsWith('/join/')) {
+        const rawCode = (hash.replace('#/join/', '') || path.replace('/join/', '')).split('?')[0].split('/')[0];
+        if (rawCode) {
+          setActiveCode(rawCode);
           setCurrentView('lobby');
+          return;
         }
-      } else if (hash === '#/history') {
-        setCurrentView('history');
-      } else if (hash === '#/admin') {
-        setCurrentView('admin');
-      } else {
-        if (!isInMeeting) {
-          setCurrentView('home');
-        }
+      }
+
+      if (!isInMeeting) {
+        setCurrentView('home');
       }
     };
 
-    handleHash();
-    window.addEventListener('hashchange', handleHash);
-    return () => window.removeEventListener('hashchange', handleHash);
+    handleNavigationCheck();
+    window.addEventListener('hashchange', handleNavigationCheck);
+    window.addEventListener('popstate', handleNavigationCheck);
+    return () => {
+      window.removeEventListener('hashchange', handleNavigationCheck);
+      window.removeEventListener('popstate', handleNavigationCheck);
+    };
   }, [isInMeeting]);
 
   const handleJoinRequested = (code: string, isHost = false) => {

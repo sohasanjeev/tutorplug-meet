@@ -155,6 +155,22 @@ export const MeetingHistory: React.FC<MeetingHistoryProps> = ({ onBackToHome }) 
 
       {isLoading ? (
         <div className="py-20 text-center text-slate-500 dark:text-gray-400">Loading your recordings...</div>
+      ) : !user ? (
+        <div className="py-20 text-center bg-white dark:bg-[#121316] border border-slate-200 dark:border-[#23252a] rounded-3xl p-8 max-w-lg mx-auto shadow-sm">
+          <div className="w-14 h-14 rounded-2xl bg-orange-500/10 text-orange-500 flex items-center justify-center mx-auto mb-3">
+            <Lock className="w-7 h-7" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Account Sign-In Required</h3>
+          <p className="text-sm text-slate-500 dark:text-gray-400 mb-6">
+            Please sign in with your Teacher or Student account to view your recorded classes, continuous video recordings, and chat history.
+          </p>
+          <button
+            onClick={onBackToHome}
+            className="py-2.5 px-6 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-bold shadow-md transition-all hover:scale-[1.02] cursor-pointer"
+          >
+            Sign In on Home
+          </button>
+        </div>
       ) : filteredMeetings.length === 0 ? (
         <div className="py-20 text-center bg-white dark:bg-[#121316] border border-slate-200 dark:border-[#23252a] rounded-3xl p-8 max-w-lg mx-auto shadow-sm">
           <div className="w-14 h-14 rounded-2xl bg-orange-500/10 text-orange-500 flex items-center justify-center mx-auto mb-3">
@@ -162,13 +178,13 @@ export const MeetingHistory: React.FC<MeetingHistoryProps> = ({ onBackToHome }) 
           </div>
           <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">No recorded classes found</h3>
           <p className="text-sm text-slate-500 dark:text-gray-400 mb-6">
-            When you hold a class in your permanent room, its continuous recording and chat transcript will automatically appear here.
+            When you hold or attend a class in a TutorPlug room, its continuous recording and in-class chat transcript will automatically appear here.
           </p>
           <button
             onClick={onBackToHome}
-            className="py-2.5 px-6 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-bold shadow-md transition-all hover:scale-[1.02]"
+            className="py-2.5 px-6 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-bold shadow-md transition-all hover:scale-[1.02] cursor-pointer"
           >
-            Go to My Room
+            Go to Tutoring Space
           </button>
         </div>
       ) : (
@@ -346,10 +362,24 @@ export const MeetingHistory: React.FC<MeetingHistoryProps> = ({ onBackToHome }) 
 
               {/* CHAT TRANSCRIPT SECTION */}
               <div>
-                <h4 className="text-xs font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider mb-3 flex items-center space-x-2">
-                  <MessageSquare className="w-4 h-4 text-orange-500" />
-                  <span>In-Class Chat Transcript ({selectedMeetingDetail.messages?.length || 0})</span>
-                </h4>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider flex items-center space-x-2">
+                    <MessageSquare className="w-4 h-4 text-orange-500" />
+                    <span>In-Class Chat Transcript ({selectedMeetingDetail.messages?.length || 0})</span>
+                  </h4>
+
+                  {selectedMeetingDetail.messages && selectedMeetingDetail.messages.length > 0 && (
+                    <a
+                      href={`/api/meetings/${selectedMeetingDetail.meeting.id}/chat/download`}
+                      download
+                      className="py-1 px-3 rounded-full bg-orange-500/10 hover:bg-orange-500/20 text-orange-600 dark:text-orange-400 font-bold text-xs flex items-center space-x-1.5 transition-colors"
+                      title="Download recorded chat transcript as a text file"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Download Chat (.txt)</span>
+                    </a>
+                  )}
+                </div>
 
                 <div className="bg-slate-50 dark:bg-[#16181f] border border-slate-200 dark:border-[#23252a] rounded-2xl p-4 max-h-60 overflow-y-auto space-y-3 text-xs">
                   {!selectedMeetingDetail.messages || selectedMeetingDetail.messages.length === 0 ? (

@@ -165,6 +165,11 @@ export const api = {
     return res.json();
   },
 
+  getChatDownloadUrl(meetingId: string) {
+    return `${API_BASE}/meetings/${meetingId}/chat/download`;
+  },
+
+
   // --- Uploads ---
   uploadFile(
     file: File,

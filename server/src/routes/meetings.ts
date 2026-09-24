@@ -239,14 +239,14 @@ meetingsRouter.get('/code/:code', (req: Request, res: Response) => {
   }
 });
 
-// 5. Meeting History (Strict Teacher Privacy: Teachers ONLY see their own classes; Admin sees all)
+// 5. Meeting History (Teachers & Students see their participated/hosted classes; Admin sees all platform recordings)
 meetingsRouter.get('/history/all', (req: Request, res: Response) => {
   try {
     const authUser = getAuthUser(req);
     let meetings: any[] = [];
 
     if (authUser && authUser.role === 'admin') {
-      // Administrator: full visibility into all teachers' classes and recordings
+      // Administrator: full visibility into all clients, students, and teachers' classes and recordings
       meetings = db.prepare(`
         SELECT 
           m.*,
@@ -261,11 +261,13 @@ meetingsRouter.get('/history/all', (req: Request, res: Response) => {
           (SELECT COUNT(*) FROM messages WHERE meeting_id = m.id) AS message_count
         FROM meetings m
         LEFT JOIN users u ON u.id = m.host_id
-        LEFT JOIN recordings r ON r.meeting_id = m.id
+        LEFT JOIN recordings r ON r.id = (
+          SELECT id FROM recordings WHERE meeting_id = m.id ORDER BY created_at DESC LIMIT 1
+        )
         ORDER BY m.created_at DESC
       `).all();
     } else if (authUser && authUser.id) {
-      // Regular Teacher: strictly isolated to their own meetings and recordings
+      // Regular User (Teacher or Student): see all meetings hosted or attended
       meetings = db.prepare(`
         SELECT 
           m.*,
@@ -280,10 +282,15 @@ meetingsRouter.get('/history/all', (req: Request, res: Response) => {
           (SELECT COUNT(*) FROM messages WHERE meeting_id = m.id) AS message_count
         FROM meetings m
         LEFT JOIN users u ON u.id = m.host_id
-        LEFT JOIN recordings r ON r.meeting_id = m.id
+        LEFT JOIN recordings r ON r.id = (
+          SELECT id FROM recordings WHERE meeting_id = m.id ORDER BY created_at DESC LIMIT 1
+        )
         WHERE m.host_id = ?
+           OR m.id IN (SELECT meeting_id FROM meeting_participants WHERE user_id = ? OR LOWER(display_name) = LOWER(?))
+           OR m.id IN (SELECT meeting_id FROM messages WHERE sender_id = ?)
+           OR m.code = (SELECT personal_meeting_code FROM users WHERE id = ?)
         ORDER BY m.created_at DESC
-      `).all(authUser.id);
+      `).all(authUser.id, authUser.id, authUser.name || '', authUser.id, authUser.id);
     } else {
       // Anonymous / Unauthenticated: return empty list
       meetings = [];
@@ -307,10 +314,21 @@ meetingsRouter.get('/detail/:id', (req: Request, res: Response) => {
     }
 
     const authUser = getAuthUser(req);
-    // Security check: If meeting has a host, only the host teacher or an admin can access details & recording
-    if (meeting.host_id && authUser && authUser.role !== 'admin' && meeting.host_id !== authUser.id) {
-      res.status(403).json({ error: 'Access denied: You can only view your own class recordings.' });
-      return;
+    if (authUser && authUser.role !== 'admin' && meeting.host_id && meeting.host_id !== authUser.id) {
+      // Check if user was an attendee/participant or sent messages in this meeting
+      const isParticipant = db.prepare(`
+        SELECT 1 FROM meeting_participants 
+        WHERE meeting_id = ? AND (user_id = ? OR LOWER(display_name) = LOWER(?))
+      `).get(meeting.id, authUser.id, authUser.name || '');
+
+      const isSender = db.prepare(`
+        SELECT 1 FROM messages WHERE meeting_id = ? AND sender_id = ?
+      `).get(meeting.id, authUser.id);
+
+      if (!isParticipant && !isSender) {
+        res.status(403).json({ error: 'Access denied: You can only view recordings for classes you hosted or attended.' });
+        return;
+      }
     }
 
     const recording: any = db.prepare('SELECT * FROM recordings WHERE meeting_id = ? ORDER BY created_at DESC LIMIT 1').get(meeting.id);
@@ -329,6 +347,57 @@ meetingsRouter.get('/detail/:id', (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || 'Failed to fetch meeting detail' });
   }
 });
+
+// 6b. Download In-Class Chat Transcript
+meetingsRouter.get('/:id/chat/download', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const meeting: any = db.prepare('SELECT * FROM meetings WHERE id = ? OR code = ?').get(id, id);
+    if (!meeting) {
+      res.status(404).json({ error: 'Meeting not found' });
+      return;
+    }
+
+    const messages: any[] = db.prepare('SELECT * FROM messages WHERE meeting_id = ? ORDER BY created_at ASC').all(meeting.id);
+    const lines = [
+      '========================================================================',
+      `TUTORPLUG CLASS CHAT RECORDING TRANSCRIPT`,
+      `Room / Code: ${meeting.code}`,
+      `Title: ${meeting.title}`,
+      `Session Date: ${meeting.created_at}`,
+      `Total Messages: ${messages.length}`,
+      '========================================================================',
+      '',
+    ];
+
+    if (messages.length === 0) {
+      lines.push('(No chat messages recorded during this session)');
+    } else {
+      for (const m of messages) {
+        const time = new Date(m.created_at).toLocaleTimeString();
+        let line = `[${time}] ${m.sender_name}: ${m.content || ''}`;
+        if (m.file_url) {
+          line += ` [Attachment: ${m.file_name || 'File'} - ${m.file_url}]`;
+        }
+        lines.push(line);
+      }
+    }
+
+    lines.push('');
+    lines.push('========================================================================');
+    lines.push('End of Recorded Chat Transcript • TutorPlug Quality & Safety Records');
+
+    const fileContent = lines.join('\r\n');
+    const filename = `TutorPlug_Chat_${meeting.code}_${Date.now()}.txt`;
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(fileContent);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to generate chat transcript' });
+  }
+});
+
 
 // 7. Stream Recording Video
 meetingsRouter.get('/:id/recording/stream', (req: Request, res: Response) => {
