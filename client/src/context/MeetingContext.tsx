@@ -57,6 +57,14 @@ interface MeetingContextType {
   hostMuteAll: () => void;
   hostKickUser: (targetSocketId: string) => void;
   hostEndMeetingForAll: () => void;
+  updateInMeetingProfile: (profile: {
+    displayName?: string;
+    bio?: string;
+    avatar?: string;
+    rollNumber?: string;
+    classGrade?: string;
+    userType?: 'teacher' | 'student';
+  }) => void;
   leaveMeeting: () => void;
 }
 
@@ -245,6 +253,11 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
           displayName: displayName.trim(),
           role,
           userId: customUserId || user?.id,
+          userType: user?.userType,
+          rollNumber: user?.rollNumber,
+          classGrade: user?.classGrade,
+          bio: user?.bio,
+          avatar: user?.avatar,
         });
       };
 
@@ -329,6 +342,18 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setParticipants((prev) =>
           prev.map((p) => (p.socketId === data.socketId ? { ...p, ...data } : p))
         );
+      });
+
+      newSocket.on('participant-profile-updated', (data: { socketId: string; participant: Participant }) => {
+        setParticipants((prev) =>
+          prev.map((p) => (p.socketId === data.socketId ? { ...p, ...data.participant } : p))
+        );
+        setSelfParticipant((current) => {
+          if (current && current.socketId === data.socketId) {
+            return { ...current, ...data.participant };
+          }
+          return current;
+        });
       });
 
       newSocket.on('active-speaker', (data) => {
@@ -534,6 +559,20 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     leaveMeeting();
   };
 
+  const updateInMeetingProfile = (profile: {
+    displayName?: string;
+    bio?: string;
+    avatar?: string;
+    rollNumber?: string;
+    classGrade?: string;
+    userType?: 'teacher' | 'student';
+  }) => {
+    if (socket) {
+      socket.emit('update-profile', profile);
+    }
+    setSelfParticipant((prev) => (prev ? { ...prev, ...profile } : null));
+  };
+
   const leaveMeeting = () => {
     if (recordingStreamerRef.current) {
       recordingStreamerRef.current.stop();
@@ -615,6 +654,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         hostMuteAll,
         hostKickUser,
         hostEndMeetingForAll,
+        updateInMeetingProfile,
         leaveMeeting,
       }}
     >

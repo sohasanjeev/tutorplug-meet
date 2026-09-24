@@ -3,6 +3,10 @@ export interface User {
   name: string;
   email: string;
   role: 'admin' | 'user' | 'guest';
+  userType?: 'teacher' | 'student' | 'admin';
+  rollNumber?: string;
+  classGrade?: string;
+  bio?: string;
   avatar?: string;
   googleId?: string;
   personalMeetingCode?: string;
@@ -13,6 +17,10 @@ export interface WaitingParticipant {
   socketId: string;
   userId: string;
   displayName: string;
+  userType?: 'teacher' | 'student' | 'admin';
+  rollNumber?: string;
+  classGrade?: string;
+  avatar?: string;
   requestedAt: string;
 }
 
@@ -21,6 +29,11 @@ export interface Participant {
   userId: string;
   displayName: string;
   role: 'host' | 'cohost' | 'participant';
+  userType?: 'teacher' | 'student' | 'admin';
+  rollNumber?: string;
+  classGrade?: string;
+  bio?: string;
+  avatar?: string;
   audioEnabled: boolean;
   videoEnabled: boolean;
   isScreenSharing: boolean;

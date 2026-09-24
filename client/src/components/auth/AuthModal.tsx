@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Mail, Lock, User as UserIcon, Zap, Sparkles } from 'lucide-react';
+import { X, Mail, Lock, User as UserIcon, Zap, Sparkles, GraduationCap, BookOpen, Hash } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 
 interface AuthModalProps {
@@ -10,6 +10,9 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const { login, register, loginWithGoogle } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [userType, setUserType] = useState<'teacher' | 'student'>('teacher');
+  const [rollNumber, setRollNumber] = useState('');
+  const [classGrade, setClassGrade] = useState('');
   const [showGoogleInput, setShowGoogleInput] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -21,6 +24,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
+  const generateRollNumber = () => {
+    const rand = Math.floor(1000 + Math.random() * 9000);
+    setRollNumber(`TP-STU-${rand}`);
+  };
+
   const handleGoogleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!googleEmail.trim()) {
@@ -30,7 +38,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     try {
       setIsLoading(true);
       setError(null);
-      await loginWithGoogle(googleEmail.trim(), googleName.trim() || undefined);
+      const studentRoll = userType === 'student' ? (rollNumber.trim() || `TP-STU-${Math.floor(1000 + Math.random() * 9000)}`) : undefined;
+      await loginWithGoogle(
+        googleEmail.trim(),
+        googleName.trim() || undefined,
+        undefined,
+        undefined,
+        userType,
+        studentRoll,
+        userType === 'student' ? classGrade.trim() || undefined : undefined
+      );
       onClose();
     } catch (err: any) {
       setError(err.message || 'Google Sign-In failed');
@@ -49,9 +66,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           setError('Please enter your full name');
           return;
         }
-        await register(name.trim(), email.trim(), password);
+        const studentRoll = userType === 'student' ? (rollNumber.trim() || `TP-STU-${Math.floor(1000 + Math.random() * 9000)}`) : undefined;
+        await register(
+          name.trim(),
+          email.trim(),
+          password,
+          userType,
+          studentRoll,
+          userType === 'student' ? classGrade.trim() || undefined : undefined
+        );
       } else {
-        await login(email.trim(), password);
+        await login(email.trim(), password, userType);
       }
       onClose();
     } catch (err: any) {
@@ -89,6 +114,79 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           </p>
         </div>
 
+        {/* Role Selector: Teacher vs Student */}
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-semibold text-gray-300 block uppercase tracking-wider">
+            I am joining as:
+          </label>
+          <div className="grid grid-cols-2 gap-2 bg-[#1b1c1e] p-1.5 rounded-2xl border border-[#3c4043]">
+            <button
+              type="button"
+              onClick={() => setUserType('teacher')}
+              className={`py-2 px-3 rounded-xl flex items-center justify-center space-x-2 text-xs font-bold transition-all ${
+                userType === 'teacher'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-lg shadow-amber-500/20'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Teacher / Tutor</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUserType('student');
+                if (!rollNumber) generateRollNumber();
+              }}
+              className={`py-2 px-3 rounded-xl flex items-center justify-center space-x-2 text-xs font-bold transition-all ${
+                userType === 'student'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/20'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <GraduationCap className="w-3.5 h-3.5" />
+              <span>Student</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Student Specific ID / Roll Number & Class Info */}
+        {userType === 'student' && (
+          <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-2xl space-y-2.5 animate-in fade-in">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-blue-300 flex items-center space-x-1.5">
+                <Hash className="w-3.5 h-3.5" />
+                <span>Student Roll Number / User ID</span>
+              </label>
+              <button
+                type="button"
+                onClick={generateRollNumber}
+                className="text-[10px] text-blue-400 hover:text-blue-300 underline font-medium cursor-pointer"
+              >
+                Auto Generate
+              </button>
+            </div>
+            <input
+              type="text"
+              value={rollNumber}
+              onChange={(e) => setRollNumber(e.target.value)}
+              placeholder="e.g. TP-STU-4821 or 2026-CS-042"
+              className="w-full bg-[#202124] border border-blue-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:border-blue-400 focus:outline-none"
+            />
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Class / Grade / Semester (Optional)</label>
+              <input
+                type="text"
+                value={classGrade}
+                onChange={(e) => setClassGrade(e.target.value)}
+                placeholder="e.g. Grade 10-A or B.Tech CS Sem 3"
+                className="w-full bg-[#202124] border border-[#3c4043] rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:border-blue-400 focus:outline-none"
+              />
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 text-xs text-center animate-in fade-in">
             {error}
@@ -124,7 +222,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                 />
               </svg>
-              <span>Continue with Google</span>
+              <span>Continue with Google as {userType === 'student' ? 'Student' : 'Teacher'}</span>
             </button>
           ) : (
             <form onSubmit={handleGoogleSubmit} className="bg-[#2d2e30] border border-[#3c4043] p-4 rounded-2xl space-y-3 animate-in fade-in">
@@ -148,7 +246,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                       d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                     />
                   </svg>
-                  <span>Google / Gmail Sign-In</span>
+                  <span>Google Sign-In ({userType === 'student' ? 'Student' : 'Teacher'})</span>
                 </div>
                 <button
                   type="button"
@@ -178,7 +276,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   type="text"
                   value={googleName}
                   onChange={(e) => setGoogleName(e.target.value)}
-                  placeholder="Prof. John Doe"
+                  placeholder={userType === 'student' ? 'Alex Kumar' : 'Prof. John Doe'}
                   className="w-full bg-[#202124] border border-[#3c4043] rounded-xl px-3 py-2 text-sm text-white focus:border-amber-400 focus:outline-none"
                 />
               </div>
@@ -189,7 +287,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition-colors flex items-center justify-center space-x-1.5 shadow"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>{isLoading ? 'Verifying Google Account...' : 'Continue with Google'}</span>
+                <span>{isLoading ? 'Verifying Google Account...' : `Continue as ${userType === 'student' ? 'Student' : 'Teacher'}`}</span>
               </button>
             </form>
           )}
@@ -215,7 +313,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Prof. Jane Doe"
+                  placeholder={userType === 'student' ? 'Alex Kumar' : 'Prof. Jane Doe'}
                   className="w-full bg-transparent border-none outline-none text-sm text-white placeholder-gray-500"
                 />
               </div>
@@ -231,7 +329,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="teacher@school.org"
+                placeholder={userType === 'student' ? 'student@school.org' : 'teacher@school.org'}
                 className="w-full bg-transparent border-none outline-none text-sm text-white placeholder-gray-500"
               />
             </div>
@@ -255,13 +353,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-colors shadow-lg shadow-amber-500/20"
+            className={`w-full py-3 px-4 rounded-xl font-bold text-sm transition-colors shadow-lg ${
+              userType === 'student'
+                ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20'
+                : 'bg-amber-500 hover:bg-amber-400 text-black shadow-amber-500/20'
+            }`}
           >
             {isLoading
               ? 'Please wait...'
               : mode === 'signup'
-              ? 'Create Tutor Account'
-              : 'Sign In'}
+              ? (userType === 'student' ? 'Create Student Account' : 'Create Teacher Account')
+              : `Sign In as ${userType === 'student' ? 'Student' : 'Teacher'}`}
           </button>
         </form>
 

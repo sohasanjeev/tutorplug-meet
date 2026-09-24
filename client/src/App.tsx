@@ -10,11 +10,113 @@ import { MeetingHistory } from './components/history/MeetingHistory.js';
 import { AdminDashboard } from './components/admin/AdminDashboard.js';
 import { AuthModal } from './components/auth/AuthModal.js';
 
+import { useAuth } from './context/AuthContext.js';
+import { UserProfileModal } from './components/meeting/UserProfileModal.js';
+import { Shield } from 'lucide-react';
+
+const AdminSecurityGate: React.FC<{ onBackToHome: () => void }> = ({ onBackToHome }) => {
+  const { user, login } = useAuth();
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoading(true);
+      setError(null);
+      await login(adminEmail.trim(), adminPassword);
+    } catch (err: any) {
+      setError(err.message || 'Administrative login failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-[80vh] flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-[#18191d] border border-slate-200 dark:border-[#3c4043] rounded-3xl max-w-md w-full p-8 shadow-2xl space-y-6 text-center">
+        <div className="w-16 h-16 rounded-3xl bg-red-500/10 border border-red-500/20 text-red-500 mx-auto flex items-center justify-center shadow-lg">
+          <Shield className="w-8 h-8" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Admin Authorization Required
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-gray-400">
+            This management console is strictly restricted to Sanjeev and the TutorPlug executive administration team.
+          </p>
+        </div>
+
+        {user && user.role !== 'admin' && (
+          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-500 text-xs text-left">
+            ⚠️ You are signed in as <strong>{user.email}</strong>, which does not have administrative privileges. Please sign in with an executive administrator account.
+          </div>
+        )}
+
+        {error && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-500 text-xs">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4 text-left">
+          <div>
+            <label className="text-xs font-semibold text-slate-700 dark:text-gray-300 block mb-1">
+              Admin Email
+            </label>
+            <input
+              type="email"
+              required
+              value={adminEmail}
+              onChange={(e) => setAdminEmail(e.target.value)}
+              placeholder="sanjeev@tutorplug.com"
+              className="w-full bg-slate-50 dark:bg-[#202124] border border-slate-300 dark:border-[#3c4043] rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white focus:border-amber-400 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-700 dark:text-gray-300 block mb-1">
+              Admin Password
+            </label>
+            <input
+              type="password"
+              required
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full bg-slate-50 dark:bg-[#202124] border border-slate-300 dark:border-[#3c4043] rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white focus:border-amber-400 focus:outline-none"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-bold text-sm transition-all shadow-lg shadow-red-500/20"
+          >
+            {isLoading ? 'Verifying Credentials...' : 'Unlock Admin Portal'}
+          </button>
+        </form>
+
+        <button
+          onClick={onBackToHome}
+          className="text-xs text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+        >
+          ← Return to TutorPlug Home
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const AppContent: React.FC = () => {
   const { isInMeeting } = useMeeting();
+  const { user } = useAuth();
   const [currentView, setCurrentView] = useState<'home' | 'lobby' | 'meeting' | 'history' | 'admin'>('home');
   const [activeCode, setActiveCode] = useState<string>('');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   // Handle URL hash changes for deep linking (e.g., direct join links: /#/meeting/tp-xxx-yyyy)
   useEffect(() => {
@@ -87,6 +189,7 @@ const AppContent: React.FC = () => {
         currentView={currentView === 'lobby' ? 'home' : (currentView as 'home' | 'history' | 'admin')}
         onNavigate={handleNavigate}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onOpenProfileModal={() => setIsProfileModalOpen(true)}
       />
 
       <main className="flex-1">
@@ -103,7 +206,11 @@ const AppContent: React.FC = () => {
           />
         )}
         {currentView === 'admin' && (
-          <AdminDashboard onBackToHome={() => handleNavigate('home')} />
+          user?.role === 'admin' ? (
+            <AdminDashboard onBackToHome={() => handleNavigate('home')} />
+          ) : (
+            <AdminSecurityGate onBackToHome={() => handleNavigate('home')} />
+          )
         )}
       </main>
 
@@ -111,6 +218,14 @@ const AppContent: React.FC = () => {
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
+      />
+
+      {/* Standalone Profile Modal */}
+      <UserProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        currentUser={user}
+        isSelf={true}
       />
     </div>
   );

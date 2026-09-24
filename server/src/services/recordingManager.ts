@@ -110,6 +110,104 @@ export class RecordingManager {
   }
 
   /**
+   * Patches the WebM file's EBML Info header with an accurate Duration element
+   * so media players and browsers can seek/scrub across the entire video.
+   */
+  static patchWebmFileDuration(filePath: string, durationMs: number): boolean {
+    try {
+      if (!fs.existsSync(filePath)) return false;
+      const buffer = fs.readFileSync(filePath);
+      if (buffer.length < 50) return false;
+
+      const infoHeader = Buffer.from([0x15, 0x49, 0xa9, 0x66]);
+      const durationHeader = Buffer.from([0x44, 0x89]);
+
+      const infoPos = buffer.indexOf(infoHeader);
+      if (infoPos === -1) return false;
+
+      // Check if Duration (0x44 0x89) is already present in Info
+      const searchLimit = Math.min(buffer.length, infoPos + 300);
+      const existingDurationPos = buffer.indexOf(durationHeader, infoPos);
+
+      if (existingDurationPos !== -1 && existingDurationPos < searchLimit) {
+        const lenByte = buffer[existingDurationPos + 2];
+        if (lenByte === 0x84) {
+          const durBuf = Buffer.alloc(4);
+          durBuf.writeFloatBE(durationMs, 0);
+          durBuf.copy(buffer, existingDurationPos + 3);
+          fs.writeFileSync(filePath, buffer);
+          return true;
+        } else if (lenByte === 0x88) {
+          const durBuf = Buffer.alloc(8);
+          durBuf.writeDoubleBE(durationMs, 0);
+          durBuf.copy(buffer, existingDurationPos + 3);
+          fs.writeFileSync(filePath, buffer);
+          return true;
+        }
+      }
+
+      // If Duration is not in Info, parse Info length vint and insert Duration element
+      const infoLenPos = infoPos + 4;
+      const firstByte = buffer[infoLenPos];
+      let vintLen = 1;
+      let mask = 0x80;
+      while (!(firstByte & mask) && vintLen < 8) {
+        mask >>= 1;
+        vintLen++;
+      }
+
+      let infoDataLen = firstByte & (mask - 1);
+      for (let i = 1; i < vintLen; i++) {
+        infoDataLen = (infoDataLen << 8) | buffer[infoLenPos + i];
+      }
+
+      const infoDataStart = infoLenPos + vintLen;
+      const timecodeScaleHeader = Buffer.from([0x2a, 0xd7, 0xb1]);
+      const tcPos = buffer.indexOf(timecodeScaleHeader, infoDataStart);
+
+      let insertPos = infoDataStart;
+      if (tcPos !== -1 && tcPos < infoDataStart + 50) {
+        const tcValLen = buffer[tcPos + 3] & 0x7f;
+        insertPos = tcPos + 4 + tcValLen;
+      }
+
+      // Build Duration element: ID (0x44, 0x89) + length (0x88 = 8 bytes float) + 8-byte double
+      const durationElem = Buffer.alloc(11);
+      durationElem[0] = 0x44;
+      durationElem[1] = 0x89;
+      durationElem[2] = 0x88;
+      durationElem.writeDoubleBE(durationMs, 3);
+
+      const newInfoDataLen = infoDataLen + durationElem.length;
+      const newBuffer = Buffer.concat([
+        buffer.subarray(0, insertPos),
+        durationElem,
+        buffer.subarray(insertPos),
+      ]);
+
+      if (vintLen === 1 && newInfoDataLen < 127) {
+        newBuffer[infoLenPos] = 0x80 | newInfoDataLen;
+      } else {
+        const updatedVint = Buffer.alloc(vintLen);
+        let temp = newInfoDataLen;
+        for (let i = vintLen - 1; i >= 0; i--) {
+          updatedVint[i] = temp & 0xff;
+          temp >>= 8;
+        }
+        updatedVint[0] |= (0x80 >> (vintLen - 1));
+        updatedVint.copy(newBuffer, infoLenPos);
+      }
+
+      fs.writeFileSync(filePath, newBuffer);
+      console.log(`[RecordingManager] ⏱ Successfully injected ${durationMs}ms duration into ${filePath}`);
+      return true;
+    } catch (err) {
+      console.warn('[RecordingManager] Failed to patch WebM duration:', err);
+      return false;
+    }
+  }
+
+  /**
    * Stops recording and finalizes the recording file and database record
    */
   static stopRecording(meetingId: string): Promise<any> {
@@ -126,6 +224,9 @@ export class RecordingManager {
 
       session.writeStream.end(() => {
         try {
+          // Patch EBML duration header so video is fully seekable/scrubbable
+          RecordingManager.patchWebmFileDuration(session.filePath, durationSeconds * 1000);
+
           const stats = fs.existsSync(session.filePath) ? fs.statSync(session.filePath) : null;
           const finalSize = stats ? stats.size : session.totalBytes;
 

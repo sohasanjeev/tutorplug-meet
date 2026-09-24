@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { Mic, MicOff, Pin, Hand } from 'lucide-react';
+import { Mic, MicOff, Pin, Hand, Info } from 'lucide-react';
 import type { Participant } from '../../types.js';
 
 interface VideoTileProps {
@@ -9,6 +9,7 @@ interface VideoTileProps {
   isActiveSpeaker?: boolean;
   isPinned?: boolean;
   onTogglePin?: () => void;
+  onOpenProfile?: (participant: Participant) => void;
 }
 
 export const VideoTile: React.FC<VideoTileProps> = ({
@@ -18,6 +19,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   isActiveSpeaker = false,
   isPinned = false,
   onTogglePin,
+  onOpenProfile,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [, setTrackRevision] = React.useState(0);
@@ -77,17 +79,52 @@ export const VideoTile: React.FC<VideoTileProps> = ({
       />
 
       {!hasVideo && (
-        <div className="flex flex-col items-center justify-center space-y-3">
-          <div className="w-20 h-20 sm:w-28 sm:h-28 rounded-full bg-gradient-to-br from-blue-700 to-indigo-900 text-white font-bold text-2xl sm:text-4xl flex items-center justify-center shadow-xl ring-4 ring-white/10">
-            {participant.displayName.charAt(0).toUpperCase()}
+        <div
+          onClick={() => onOpenProfile?.(participant)}
+          className={`flex flex-col items-center justify-center space-y-3 z-0 ${onOpenProfile ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}
+          title={onOpenProfile ? `Click to view ${participant.displayName}'s profile` : undefined}
+        >
+          <div className="w-20 h-20 sm:w-28 sm:h-28 rounded-full bg-gradient-to-tr from-amber-500 via-orange-500 to-yellow-400 p-1 shadow-xl ring-4 ring-white/10 overflow-hidden">
+            {participant.avatar ? (
+              <img
+                src={participant.avatar}
+                alt={participant.displayName}
+                className="w-full h-full object-cover rounded-full bg-[#18191d]"
+              />
+            ) : (
+              <div className="w-full h-full rounded-full bg-[#202124] flex items-center justify-center text-2xl sm:text-4xl font-extrabold text-amber-400">
+                {participant.displayName.charAt(0).toUpperCase()}
+              </div>
+            )}
           </div>
-          <span className="text-sm sm:text-base font-medium text-gray-300">
-            {participant.displayName} {isLocal && '(You)'}
-          </span>
+          <div className="text-center px-3">
+            <span className="text-sm sm:text-base font-semibold text-gray-200 block">
+              {participant.displayName} {isLocal && '(You)'}
+            </span>
+            {participant.rollNumber && (
+              <span className="text-[11px] font-mono text-blue-400 font-medium block">
+                Roll ID: {participant.rollNumber}
+              </span>
+            )}
+            {participant.bio && (
+              <p className="text-[11px] text-gray-400 max-w-[200px] truncate mx-auto mt-0.5">
+                {participant.bio}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
       <div className="absolute top-3 right-3 flex items-center space-x-1.5 z-10">
+        {onOpenProfile && (
+          <button
+            onClick={() => onOpenProfile(participant)}
+            className="w-8 h-8 rounded-full flex items-center justify-center bg-black/50 text-gray-300 opacity-0 group-hover:opacity-100 hover:bg-black/80 hover:text-white transition-all shadow"
+            title={`View ${participant.displayName}'s profile`}
+          >
+            <Info className="w-4 h-4" />
+          </button>
+        )}
         {participant.isHandRaised && (
           <div className="flex items-center space-x-1 bg-yellow-500/90 text-black px-2 py-1 rounded-full text-xs font-bold shadow-lg animate-bounce">
             <Hand className="w-3.5 h-3.5" />
@@ -110,22 +147,30 @@ export const VideoTile: React.FC<VideoTileProps> = ({
       </div>
 
       <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
-        <div className="flex items-center space-x-2 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-medium text-white shadow">
-          <span>{participant.displayName} {isLocal && '(You)'}</span>
-          {participant.role === 'host' && (
-            <span className="text-[10px] bg-blue-500/30 text-blue-300 px-1 rounded font-semibold">
+        <div className="flex items-center space-x-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-medium text-white shadow max-w-[80%] truncate">
+          <span className="truncate">{participant.displayName} {isLocal && '(You)'}</span>
+          {participant.role === 'host' ? (
+            <span className="text-[9px] bg-blue-500/30 text-blue-300 px-1 py-0.5 rounded font-semibold shrink-0">
               Host
+            </span>
+          ) : participant.userType === 'student' ? (
+            <span className="text-[9px] bg-blue-600/30 text-blue-300 px-1 py-0.5 rounded font-semibold shrink-0 font-mono">
+              {participant.rollNumber || 'Student'}
+            </span>
+          ) : (
+            <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1 py-0.5 rounded font-semibold shrink-0">
+              Teacher
             </span>
           )}
           {participant.isScreenSharing && (
-            <span className="text-[10px] bg-emerald-500/30 text-emerald-300 px-1 rounded font-semibold">
+            <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1 py-0.5 rounded font-semibold shrink-0">
               Sharing
             </span>
           )}
         </div>
 
         <div
-          className={`w-7 h-7 rounded-full flex items-center justify-center shadow ${
+          className={`w-7 h-7 rounded-full flex items-center justify-center shadow shrink-0 ${
             participant.audioEnabled
               ? 'bg-black/50 text-white'
               : 'bg-red-600 text-white'

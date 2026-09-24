@@ -3,7 +3,43 @@ import { v4 as uuidv4 } from 'uuid';
 import { db, generateTutorPlugCode } from '../db/database.js';
 import { StorageService } from '../services/storage.js';
 
+import jwt from 'jsonwebtoken';
+import { CONFIG } from '../config.js';
+
 export const adminRouter = Router();
+
+// Strict Admin Authorization Middleware
+function requireAdmin(req: Request, res: Response, next: any) {
+  const authHeader = req.headers.authorization;
+  let decodedUser: any = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      decodedUser = jwt.verify(token, CONFIG.JWT_SECRET);
+    } catch {}
+  }
+
+  const queryUserId = (req.query.userId as string) || (req.headers['x-user-id'] as string);
+  const targetId = decodedUser?.id || queryUserId;
+
+  if (!targetId) {
+    res.status(401).json({ error: 'Authentication required for Administrator Portal' });
+    return;
+  }
+
+  const dbUser: any = db.prepare('SELECT id, email, role FROM users WHERE id = ?').get(targetId);
+  const isDedicatedAdmin = dbUser && ['admin@tutorplug.com', 'sanjeev@tutorplug.com'].includes((dbUser.email || '').toLowerCase());
+
+  if (!dbUser || (!isDedicatedAdmin && dbUser.role !== 'admin')) {
+    res.status(403).json({ error: 'Access denied: Administrator authorization required.' });
+    return;
+  }
+
+  next();
+}
+
+adminRouter.use(requireAdmin);
 
 // 1. Admin System Telemetry & Statistics
 adminRouter.get('/stats', (_req: Request, res: Response) => {

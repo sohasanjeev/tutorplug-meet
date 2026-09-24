@@ -7,9 +7,10 @@ interface NavbarProps {
   currentView: 'home' | 'history' | 'admin';
   onNavigate: (view: 'home' | 'history' | 'admin') => void;
   onOpenAuthModal?: () => void;
+  onOpenProfileModal?: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenAuthModal }) => {
+export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenAuthModal, onOpenProfileModal }) => {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [time, setTime] = useState<string>('');
@@ -69,17 +70,19 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenA
             <History className="w-4 h-4" />
             <span>Class Recordings</span>
           </button>
-          <button
-            onClick={() => onNavigate('admin')}
-            className={`px-3.5 py-1.5 rounded-full text-sm font-medium flex items-center space-x-1.5 transition-colors ${
-              currentView === 'admin'
-                ? 'bg-slate-900 text-white dark:bg-white/10 dark:text-white'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-white/5'
-            }`}
-          >
-            <Shield className="w-4 h-4" />
-            <span>Admin Authorization</span>
-          </button>
+          {user?.role === 'admin' && (
+            <button
+              onClick={() => onNavigate('admin')}
+              className={`px-3.5 py-1.5 rounded-full text-sm font-medium flex items-center space-x-1.5 transition-colors ${
+                currentView === 'admin'
+                  ? 'bg-amber-500 text-black font-semibold'
+                  : 'text-amber-500 hover:text-amber-400 hover:bg-amber-500/10'
+              }`}
+            >
+              <Shield className="w-4 h-4" />
+              <span>Admin Portal</span>
+            </button>
+          )}
         </nav>
       </div>
 
@@ -124,26 +127,43 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenA
         {/* User / Gmail Login */}
         {user ? (
           <div className="flex items-center space-x-3 pl-2 border-l border-slate-200 dark:border-[#3c4043]">
-            <div className="text-right hidden sm:block">
-              <div className="text-xs font-semibold text-slate-900 dark:text-white flex items-center justify-end space-x-1">
+            <button
+              onClick={onOpenProfileModal}
+              title="View & Edit Profile"
+              className="text-right hidden sm:block hover:opacity-80 transition-opacity text-left cursor-pointer"
+            >
+              <div className="text-xs font-semibold text-slate-900 dark:text-white flex items-center justify-end space-x-1.5">
                 <span>{user.name}</span>
-                {user.role === 'admin' && (
-                  <span className="text-[9px] bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30 px-1 rounded font-bold">
+                {user.role === 'admin' ? (
+                  <span className="text-[9px] bg-red-500/20 text-red-400 border border-red-500/40 px-1.5 py-0.2 rounded font-black tracking-wide">
                     ADMIN
+                  </span>
+                ) : user.userType === 'student' ? (
+                  <span className="text-[9px] bg-blue-500/20 text-blue-400 border border-blue-500/40 px-1.5 py-0.2 rounded font-bold">
+                    STUDENT {user.rollNumber ? `• ${user.rollNumber}` : ''}
+                  </span>
+                ) : (
+                  <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold">
+                    TEACHER
                   </span>
                 )}
               </div>
               <div className="text-[10px] text-slate-500 dark:text-gray-400 font-mono">
                 {user.personalMeetingCode ? `Room: ${user.personalMeetingCode}` : user.email}
               </div>
-            </div>
+            </button>
 
-            <div
-              title={`${user.name} (${user.email})`}
-              className="w-9 h-9 rounded-full bg-gradient-to-tr from-orange-500 to-amber-500 text-white font-extrabold flex items-center justify-center text-sm shadow ring-2 ring-orange-400/40"
+            <button
+              onClick={onOpenProfileModal}
+              title={`${user.name} (Click to edit profile)`}
+              className="w-9 h-9 rounded-full bg-gradient-to-tr from-orange-500 to-amber-500 text-white font-extrabold flex items-center justify-center text-sm shadow ring-2 ring-orange-400/40 overflow-hidden cursor-pointer hover:ring-amber-300 transition-all"
             >
-              {user.name.charAt(0).toUpperCase()}
-            </div>
+              {user.avatar ? (
+                <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+              ) : (
+                <span>{user.name.charAt(0).toUpperCase()}</span>
+              )}
+            </button>
 
             <button
               onClick={logout}

@@ -18,7 +18,11 @@ import {
 } from 'lucide-react';
 import { useMeeting } from '../../context/MeetingContext.js';
 
-export const MeetingControls: React.FC = () => {
+interface MeetingControlsProps {
+  onOpenProfile?: () => void;
+}
+
+export const MeetingControls: React.FC<MeetingControlsProps> = ({ onOpenProfile }) => {
   const {
     meetingCode,
     isAudioMuted,
@@ -255,6 +259,23 @@ export const MeetingControls: React.FC = () => {
               title="Host management controls"
             >
               <Shield className="w-5 h-5" />
+            </button>
+          )}
+
+          {/* My Profile Button */}
+          {onOpenProfile && (
+            <button
+              onClick={onOpenProfile}
+              className="w-9 h-9 rounded-full flex items-center justify-center p-0.5 overflow-hidden ring-2 ring-amber-400/50 hover:ring-amber-300 transition-all cursor-pointer ml-1"
+              title="My Profile & Avatar"
+            >
+              {selfParticipant?.avatar ? (
+                <img src={selfParticipant.avatar} alt="Me" className="w-full h-full object-cover rounded-full" />
+              ) : (
+                <div className="w-full h-full rounded-full bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-xs font-black text-black">
+                  {selfParticipant?.displayName?.charAt(0).toUpperCase() || 'U'}
+                </div>
+              )}
             </button>
           )}
         </div>

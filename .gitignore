@@ -1,4 +1,4 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 client/node_modules/
 server/node_modules/
@@ -37,3 +37,4 @@ pnpm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+scratch/

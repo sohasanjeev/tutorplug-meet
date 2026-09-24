@@ -3,11 +3,11 @@ const API_BASE = `${BACKEND_URL}/api`;
 
 export const api = {
   // --- Auth ---
-  async login(email: string, password: string) {
+  async login(email: string, password: string, userType?: string) {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, userType }),
     });
     if (!res.ok) {
       const data = await res.json();
@@ -16,11 +16,20 @@ export const api = {
     return res.json();
   },
 
-  async register(name: string, email: string, password: string) {
+  async register(params: {
+    name: string;
+    email: string;
+    password: string;
+    userType?: 'teacher' | 'student';
+    rollNumber?: string;
+    classGrade?: string;
+    bio?: string;
+    avatar?: string;
+  }) {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify(params),
     });
     if (!res.ok) {
       const data = await res.json();
@@ -29,17 +38,33 @@ export const api = {
     return res.json();
   },
 
-  async loginWithGoogle(email: string, name?: string, googleId?: string, avatar?: string) {
+  async loginWithGoogle(email: string, name?: string, googleId?: string, avatar?: string, userType?: string, rollNumber?: string, classGrade?: string) {
     const res = await fetch(`${API_BASE}/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name, googleId, avatar }),
+      body: JSON.stringify({ email, name, googleId, avatar, userType, rollNumber, classGrade }),
     });
     if (!res.ok) {
       const data = await res.json();
       throw new Error(data.error || 'Google Sign-In failed');
     }
     return res.json();
+  },
+
+  async updateProfile(token: string, profile: { name?: string; bio?: string; avatar?: string; rollNumber?: string; classGrade?: string; userType?: string }) {
+    const res = await fetch(`${API_BASE}/auth/profile`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(profile),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to update profile');
+    }
+    return data;
   },
 
   async guestLogin(displayName: string) {
@@ -183,27 +208,40 @@ export const api = {
 
   // --- Admin ---
   async getAdminStats() {
-    const res = await fetch(`${API_BASE}/admin/stats`);
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
+    const res = await fetch(`${API_BASE}/admin/stats`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     if (!res.ok) throw new Error('Failed to fetch admin stats');
     return res.json();
   },
 
   async getAdminRecordings() {
-    const res = await fetch(`${API_BASE}/admin/recordings`);
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
+    const res = await fetch(`${API_BASE}/admin/recordings`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     if (!res.ok) throw new Error('Failed to fetch admin recordings');
     return res.json();
   },
 
   async getAdminLinkRequests() {
-    const res = await fetch(`${API_BASE}/admin/link-requests`);
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
+    const res = await fetch(`${API_BASE}/admin/link-requests`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     if (!res.ok) throw new Error('Failed to fetch link requests');
     return res.json();
   },
 
   async approveLinkRequest(id: string, reviewerName?: string) {
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
     const res = await fetch(`${API_BASE}/admin/link-requests/${id}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ reviewerName }),
     });
     const data = await res.json();
@@ -212,9 +250,13 @@ export const api = {
   },
 
   async rejectLinkRequest(id: string, reviewerName?: string, reason?: string) {
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
     const res = await fetch(`${API_BASE}/admin/link-requests/${id}/reject`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ reviewerName, reason }),
     });
     const data = await res.json();
@@ -223,8 +265,10 @@ export const api = {
   },
 
   async deleteRecording(id: string) {
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
     const res = await fetch(`${API_BASE}/admin/recordings/${id}`, {
       method: 'DELETE',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) throw new Error('Failed to delete recording');
     return res.json();

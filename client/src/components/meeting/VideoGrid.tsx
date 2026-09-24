@@ -12,6 +12,7 @@ interface VideoGridProps {
   layoutMode: LayoutMode;
   pinnedId: string | null;
   onTogglePin: (id: string | null) => void;
+  onOpenProfile?: (participant: Participant) => void;
 }
 
 export const VideoGrid: React.FC<VideoGridProps> = ({
@@ -24,6 +25,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   layoutMode,
   pinnedId,
   onTogglePin,
+  onOpenProfile,
 }) => {
   const allTiles: { participant: Participant; stream: MediaStream | null; isLocal: boolean; tileId: string }[] = [];
 
@@ -101,6 +103,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
             isActiveSpeaker={activeSpeakerId === (pinnedTile.isLocal ? 'self' : pinnedTile.participant.socketId)}
             isPinned={true}
             onTogglePin={() => onTogglePin(null)}
+            onOpenProfile={onOpenProfile}
           />
         </div>
 
@@ -117,6 +120,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                     isActiveSpeaker={activeSpeakerId === tileId}
                     isPinned={false}
                     onTogglePin={() => onTogglePin(tileId)}
+                    onOpenProfile={onOpenProfile}
                   />
                 </div>
               );
@@ -151,6 +155,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
               isActiveSpeaker={activeSpeakerId === tileId}
               isPinned={false}
               onTogglePin={() => onTogglePin(tileId)}
+              onOpenProfile={onOpenProfile}
             />
           </div>
         );

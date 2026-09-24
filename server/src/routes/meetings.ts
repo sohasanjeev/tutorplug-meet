@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { db, generateTutorPlugCode, ensureUserPersonalRoom, getOrCreateHostForCode } from '../db/database.js';
 import { StorageService } from '../services/storage.js';
+import { RecordingManager } from '../services/recordingManager.js';
 
 import jwt from 'jsonwebtoken';
 import { CONFIG } from '../config.js';
@@ -345,6 +346,15 @@ meetingsRouter.get('/:id/recording/stream', (req: Request, res: Response) => {
       return;
     }
 
+    // Ensure WebM is seekable before streaming
+    if (recording.duration_seconds && recording.duration_seconds > 0) {
+      try {
+        RecordingManager.patchWebmFileDuration(recording.file_path, recording.duration_seconds * 1000);
+      } catch (patchErr) {
+        console.warn('Could not pre-patch WebM duration before stream:', patchErr);
+      }
+    }
+
     StorageService.streamMediaFile(req, res, recording.file_path, recording.mime_type || 'video/webm');
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to stream recording' });
@@ -360,6 +370,15 @@ meetingsRouter.get('/:id/recording/download', (req: Request, res: Response) => {
     if (!recording || !fs.existsSync(recording.file_path)) {
       res.status(404).json({ error: 'Recording not found' });
       return;
+    }
+
+    // Ensure WebM has seekable duration header before downloading
+    if (recording.duration_seconds && recording.duration_seconds > 0) {
+      try {
+        RecordingManager.patchWebmFileDuration(recording.file_path, recording.duration_seconds * 1000);
+      } catch (patchErr) {
+        console.warn('Could not pre-patch WebM duration before download:', patchErr);
+      }
     }
 
     const downloadName = `TutorPlug_${recording.file_name}`;

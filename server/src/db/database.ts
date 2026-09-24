@@ -52,6 +52,18 @@ export function initDatabase() {
   if (!userColumnNames.includes('allowed_link_quota')) {
     db.exec('ALTER TABLE users ADD COLUMN allowed_link_quota INTEGER NOT NULL DEFAULT 1;');
   }
+  if (!userColumnNames.includes('user_type')) {
+    db.exec("ALTER TABLE users ADD COLUMN user_type TEXT NOT NULL DEFAULT 'teacher';");
+  }
+  if (!userColumnNames.includes('roll_number')) {
+    db.exec('ALTER TABLE users ADD COLUMN roll_number TEXT;');
+  }
+  if (!userColumnNames.includes('bio')) {
+    db.exec('ALTER TABLE users ADD COLUMN bio TEXT;');
+  }
+  if (!userColumnNames.includes('class_grade')) {
+    db.exec('ALTER TABLE users ADD COLUMN class_grade TEXT;');
+  }
 
   // 2. Meetings table
   db.exec(`
@@ -281,8 +293,8 @@ function seedDefaultUsers() {
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync('Admin@123456', salt);
     db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, role, allowed_link_quota)
-      VALUES (?, ?, ?, ?, 'admin', 10)
+      INSERT INTO users (id, name, email, password_hash, role, user_type, allowed_link_quota)
+      VALUES (?, ?, ?, ?, 'admin', 'admin', 10)
     `).run(adminId, 'TutorPlug Administrator', 'admin@tutorplug.com', hash);
     ensureUserPersonalRoom(adminId, 'TutorPlug Admin');
   }
@@ -293,8 +305,8 @@ function seedDefaultUsers() {
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync('Tutor@123456', salt);
     db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, role, allowed_link_quota)
-      VALUES (?, ?, ?, ?, 'user', 1)
+      INSERT INTO users (id, name, email, password_hash, role, user_type, allowed_link_quota)
+      VALUES (?, ?, ?, ?, 'teacher', 'teacher', 1)
     `).run(demoId, 'Sarah Jenkins (Tutor)', 'tutor@tutorplug.com', hash);
     ensureUserPersonalRoom(demoId, 'Sarah');
   }
@@ -306,8 +318,8 @@ function seedDefaultUsers() {
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync('Sanjeev@123', salt);
     db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, role, allowed_link_quota, personal_meeting_code)
-      VALUES (?, ?, ?, ?, 'admin', 10, 'tp-sanjee-rb27')
+      INSERT INTO users (id, name, email, password_hash, role, user_type, allowed_link_quota, personal_meeting_code)
+      VALUES (?, ?, ?, ?, 'admin', 'admin', 10, 'tp-sanjee-rb27')
     `).run(sanjeevId, 'Sanjeev', 'sanjeev@tutorplug.com', hash);
 
     const existingMeeting: any = db.prepare('SELECT id FROM meetings WHERE LOWER(code) = ?').get('tp-sanjee-rb27');
@@ -323,4 +335,8 @@ function seedDefaultUsers() {
       db.prepare('UPDATE users SET personal_meeting_id = ? WHERE id = ?').run(existingMeeting.id, sanjeevId);
     }
   }
+
+  // Enforce strict admin isolation: only designated admin emails retain admin role
+  db.prepare("UPDATE users SET role = 'admin', user_type = 'admin' WHERE LOWER(email) IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com')").run();
+  db.prepare("UPDATE users SET role = 'teacher', user_type = 'teacher' WHERE LOWER(email) NOT IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com') AND role = 'admin'").run();
 }

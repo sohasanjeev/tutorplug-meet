@@ -8,6 +8,11 @@ interface Participant {
   userId: string;
   displayName: string;
   role: 'host' | 'cohost' | 'participant';
+  userType?: 'teacher' | 'student' | 'admin';
+  rollNumber?: string;
+  bio?: string;
+  classGrade?: string;
+  avatar?: string;
   audioEnabled: boolean;
   videoEnabled: boolean;
   isScreenSharing: boolean;
@@ -17,12 +22,23 @@ interface Participant {
 
 export function setupSignaling(io: Server) {
   // Map of meetingCode -> Map<socketId, Participant>
-  // Map of meetingCode -> Map<socketId, Participant>
   const rooms: Map<string, Map<string, Participant>> = new Map();
   // Map of meetingCode -> meetingId (database UUID)
   const meetingIdMap: Map<string, string> = new Map();
   // Map of meetingCode -> Map<socketId, WaitingParticipant>
-  const waitingRooms: Map<string, Map<string, { socketId: string; userId: string; displayName: string; role: string; requestedAt: string; socket: Socket }>> = new Map();
+  const waitingRooms: Map<string, Map<string, {
+    socketId: string;
+    userId: string;
+    displayName: string;
+    role: string;
+    userType?: string;
+    rollNumber?: string;
+    classGrade?: string;
+    avatar?: string;
+    bio?: string;
+    requestedAt: string;
+    socket: Socket;
+  }>> = new Map();
   // Map of socketId -> meetingCode
   const socketToRoomMap: Map<string, string> = new Map();
   // Map of socketId -> meetingId
@@ -37,6 +53,10 @@ export function setupSignaling(io: Server) {
       socketId: w.socketId,
       userId: w.userId,
       displayName: w.displayName,
+      userType: w.userType,
+      rollNumber: w.rollNumber,
+      classGrade: w.classGrade,
+      avatar: w.avatar,
       requestedAt: w.requestedAt,
     })) : [];
 
@@ -52,7 +72,20 @@ export function setupSignaling(io: Server) {
 
   io.on('connection', (socket: Socket) => {
     // Helper: Execute complete admission into meeting room
-    const admitUserToRoom = (targetSocket: Socket, meeting: any, userId: string, displayName: string, role: 'host' | 'participant') => {
+    const admitUserToRoom = (
+      targetSocket: Socket,
+      meeting: any,
+      userId: string,
+      displayName: string,
+      role: 'host' | 'participant',
+      profileMeta?: {
+        userType?: 'teacher' | 'student' | 'admin';
+        rollNumber?: string;
+        bio?: string;
+        classGrade?: string;
+        avatar?: string;
+      }
+    ) => {
       const meetingCode = meeting.code;
       (targetSocket as any).currentMeetingCode = meetingCode;
       (targetSocket as any).currentMeetingId = meeting.id;
@@ -67,11 +100,27 @@ export function setupSignaling(io: Server) {
       }
       const roomParticipants = rooms.get(meetingCode)!;
 
+      const userRecord: any = userId ? db.prepare('SELECT * FROM users WHERE id = ?').get(userId) : null;
+      const userType: 'teacher' | 'student' | 'admin' = (
+        profileMeta?.userType ||
+        userRecord?.user_type ||
+        (userRecord?.role === 'admin' ? 'admin' : (role === 'host' ? 'teacher' : 'student'))
+      );
+      const rollNumber = profileMeta?.rollNumber || userRecord?.roll_number || (userType === 'student' ? `TP-STU-${userId.slice(0, 4).toUpperCase()}` : undefined);
+      const classGrade = profileMeta?.classGrade || userRecord?.class_grade || undefined;
+      const bio = profileMeta?.bio || userRecord?.bio || undefined;
+      const avatar = profileMeta?.avatar || userRecord?.avatar || undefined;
+
       const newParticipant: Participant = {
         socketId: targetSocket.id,
         userId,
-        displayName: displayName || 'Guest Participant',
+        displayName: displayName || (userRecord?.name) || 'Guest Participant',
         role,
+        userType,
+        rollNumber,
+        classGrade,
+        bio,
+        avatar,
         audioEnabled: true,
         videoEnabled: true,
         isScreenSharing: false,
@@ -124,155 +173,175 @@ export function setupSignaling(io: Server) {
     socket.on('join-room', (data: any) => {
       try {
         const meetingCode = (data?.meetingCode || data?.roomId || '').trim();
-      const displayName = data?.displayName || data?.userName || 'Participant';
-      const userId = data?.userId || uuidv4();
-      const requestedRole = (data?.role as any) || (data?.isHost ? 'host' : 'participant');
+        const displayName = data?.displayName || data?.userName || 'Participant';
+        const userId = data?.userId || uuidv4();
+        const requestedRole = (data?.role as any) || (data?.isHost ? 'host' : 'participant');
+        const profileMeta = {
+          userType: data?.userType,
+          rollNumber: data?.rollNumber,
+          classGrade: data?.classGrade,
+          bio: data?.bio,
+          avatar: data?.avatar,
+        };
 
-      if (!meetingCode) {
-        socket.emit('error', { message: 'Meeting code is required' });
-        return;
-      }
-
-      let meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(meetingCode.toLowerCase());
-      if (!meeting) {
-        // Auto-provision if it's a personal or valid code
-        const user = db.prepare('SELECT * FROM users WHERE LOWER(personal_meeting_code) = ?').get(meetingCode.toLowerCase()) as any;
-        if (user) {
-          const newId = uuidv4();
-          db.prepare(`
-            INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
-            VALUES (?, ?, ?, ?, ?, 'active', 1)
-          `).run(newId, user.personal_meeting_code, `${user.name}'s Tutoring Room`, 'Permanent Tutoring Room for TutorPlug', user.id);
-          meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(newId);
-        } else if (meetingCode.toLowerCase().startsWith('tp-')) {
-          const { hostId, hostName } = getOrCreateHostForCode(meetingCode.toLowerCase(), displayName, userId);
-          const newId = uuidv4();
-          db.prepare(`
-            INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
-            VALUES (?, ?, ?, ?, ?, 'active', 1)
-          `).run(newId, meetingCode.toLowerCase(), `${hostName}'s Room`, 'Tutoring Session on TutorPlug', hostId);
-          meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(newId);
-        }
-      }
-
-      if (!meeting) {
-        socket.emit('error', { message: 'Meeting not found' });
-        return;
-      }
-
-      if (meeting.status === 'ended' && !meeting.is_permanent) {
-        socket.emit('meeting:already-ended', { message: 'This meeting has already ended.' });
-        return;
-      }
-
-      // Determine Host Authority:
-      const codeSlug = (meetingCode.split('-')[1] || '').toLowerCase();
-      const nameMatchesSlug = Boolean(
-        codeSlug.length >= 3 && displayName.toLowerCase().includes(codeSlug)
-      );
-
-      // Check user record in database
-      const userInDb: any = userId ? db.prepare('SELECT id, name, role, personal_meeting_code FROM users WHERE id = ?').get(userId) : null;
-      const ownsMeetingCode = Boolean(
-        userInDb && userInDb.personal_meeting_code && userInDb.personal_meeting_code.toLowerCase() === meetingCode.toLowerCase()
-      );
-      const isDbAdmin = Boolean(userInDb && userInDb.role === 'admin');
-
-      // Check current room occupancy
-      const currentParticipants = rooms.get(meetingCode);
-      const hasActiveHostInRoom = Boolean(
-        currentParticipants && Array.from(currentParticipants.values()).some((p) => p.role === 'host')
-      );
-      const isRoomEmpty = !currentParticipants || currentParticipants.size === 0;
-
-      const isHost =
-        requestedRole === 'host' ||
-        meeting.host_id === userId ||
-        isDbAdmin ||
-        ownsMeetingCode ||
-        (!hasActiveHostInRoom && (nameMatchesSlug || (isRoomEmpty && requestedRole !== 'student')));
-
-      if (isHost) {
-        // Ensure meeting record reflects this host if needed
-        if (meeting.host_id !== userId && (ownsMeetingCode || requestedRole === 'host' || isDbAdmin || nameMatchesSlug)) {
-          try {
-            db.prepare('UPDATE meetings SET host_id = ? WHERE id = ?').run(userId, meeting.id);
-            meeting.host_id = userId;
-          } catch {}
+        if (!meetingCode) {
+          socket.emit('error', { message: 'Meeting code is required' });
+          return;
         }
 
-        // Clean up from waiting room if this socket was pending
-        const waitingMap = waitingRooms.get(meetingCode);
-        if (waitingMap && waitingMap.has(socket.id)) {
-          waitingMap.delete(socket.id);
+        let meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(meetingCode.toLowerCase());
+        if (!meeting) {
+          // Auto-provision if it's a personal or valid code
+          const user = db.prepare('SELECT * FROM users WHERE LOWER(personal_meeting_code) = ?').get(meetingCode.toLowerCase()) as any;
+          if (user) {
+            const newId = uuidv4();
+            db.prepare(`
+              INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
+              VALUES (?, ?, ?, ?, ?, 'active', 1)
+            `).run(newId, user.personal_meeting_code, `${user.name}'s Tutoring Room`, 'Permanent Tutoring Room for TutorPlug', user.id);
+            meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(newId);
+          } else if (meetingCode.toLowerCase().startsWith('tp-')) {
+            const { hostId, hostName } = getOrCreateHostForCode(meetingCode.toLowerCase(), displayName, userId);
+            const newId = uuidv4();
+            db.prepare(`
+              INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
+              VALUES (?, ?, ?, ?, ?, 'active', 1)
+            `).run(newId, meetingCode.toLowerCase(), `${hostName}'s Room`, 'Tutoring Session on TutorPlug', hostId);
+            meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(newId);
+          }
         }
 
-        // HOST BYPASSES WAITING ROOM & ENTERS IMMEDIATELY
-        admitUserToRoom(socket, meeting, userId, displayName, 'host');
+        if (!meeting) {
+          socket.emit('error', { message: 'Meeting not found' });
+          return;
+        }
 
-        // Check if students are waiting for this host to start the class
-        if (waitingMap && waitingMap.size > 0) {
-          waitingMap.forEach((waitingUser) => {
-            waitingUser.socket.emit('waiting-admission', {
-              status: 'waiting_for_host_approval',
-              meetingTitle: meeting.title,
+        if (meeting.status === 'ended' && !meeting.is_permanent) {
+          socket.emit('meeting:already-ended', { message: 'This meeting has already ended.' });
+          return;
+        }
+
+        // Determine Host Authority:
+        const codeSlug = (meetingCode.split('-')[1] || '').toLowerCase();
+        const nameMatchesSlug = Boolean(
+          codeSlug.length >= 3 && displayName.toLowerCase().includes(codeSlug)
+        );
+
+        // Check user record in database
+        const userInDb: any = userId ? db.prepare('SELECT id, name, role, personal_meeting_code FROM users WHERE id = ?').get(userId) : null;
+        const ownsMeetingCode = Boolean(
+          userInDb && userInDb.personal_meeting_code && userInDb.personal_meeting_code.toLowerCase() === meetingCode.toLowerCase()
+        );
+        const isDbAdmin = Boolean(userInDb && userInDb.role === 'admin');
+
+        // Check current room occupancy
+        const currentParticipants = rooms.get(meetingCode);
+        const hasActiveHostInRoom = Boolean(
+          currentParticipants && Array.from(currentParticipants.values()).some((p) => p.role === 'host')
+        );
+        const isRoomEmpty = !currentParticipants || currentParticipants.size === 0;
+
+        const isHost =
+          requestedRole === 'host' ||
+          meeting.host_id === userId ||
+          isDbAdmin ||
+          ownsMeetingCode ||
+          (!hasActiveHostInRoom && (nameMatchesSlug || (isRoomEmpty && requestedRole !== 'student')));
+
+        if (isHost) {
+          // Ensure meeting record reflects this host if needed
+          if (meeting.host_id !== userId && (ownsMeetingCode || requestedRole === 'host' || isDbAdmin || nameMatchesSlug)) {
+            try {
+              db.prepare('UPDATE meetings SET host_id = ? WHERE id = ?').run(userId, meeting.id);
+              meeting.host_id = userId;
+            } catch {}
+          }
+
+          // Clean up from waiting room if this socket was pending
+          const waitingMap = waitingRooms.get(meetingCode);
+          if (waitingMap && waitingMap.has(socket.id)) {
+            waitingMap.delete(socket.id);
+          }
+
+          // HOST BYPASSES WAITING ROOM & ENTERS IMMEDIATELY
+          admitUserToRoom(socket, meeting, userId, displayName, 'host', profileMeta);
+
+          // Check if students are waiting for this host to start the class
+          if (waitingMap && waitingMap.size > 0) {
+            waitingMap.forEach((waitingUser) => {
+              waitingUser.socket.emit('waiting-admission', {
+                status: 'waiting_for_host_approval',
+                meetingTitle: meeting.title,
+              });
+              socket.emit('join-request', {
+                socketId: waitingUser.socketId,
+                userId: waitingUser.userId,
+                displayName: waitingUser.displayName,
+                userType: waitingUser.userType,
+                rollNumber: waitingUser.rollNumber,
+                classGrade: waitingUser.classGrade,
+                avatar: waitingUser.avatar,
+                requestedAt: waitingUser.requestedAt,
+              });
             });
-            socket.emit('join-request', {
-              socketId: waitingUser.socketId,
-              userId: waitingUser.userId,
-              displayName: waitingUser.displayName,
-              requestedAt: waitingUser.requestedAt,
-            });
-          });
-          broadcastWaitingList(meetingCode);
-        }
-      } else {
-        // NON-HOST PARTICIPANT (STUDENT / GUEST): ENTERS WAITING ROOM (KNOCKING)
-        (socket as any).currentMeetingCode = meetingCode;
-        socketToRoomMap.set(socket.id, meetingCode);
+            broadcastWaitingList(meetingCode);
+          }
+        } else {
+          // NON-HOST PARTICIPANT (STUDENT / GUEST): ENTERS WAITING ROOM (KNOCKING)
+          (socket as any).currentMeetingCode = meetingCode;
+          socketToRoomMap.set(socket.id, meetingCode);
 
-        if (!waitingRooms.has(meetingCode)) {
-          waitingRooms.set(meetingCode, new Map());
-        }
-        waitingRooms.get(meetingCode)!.set(socket.id, {
-          socketId: socket.id,
-          userId,
-          displayName: displayName || 'Student',
-          role: 'participant',
-          requestedAt: new Date().toISOString(),
-          socket,
-        });
-
-        const roomParticipants = rooms.get(meetingCode);
-        const hostParticipant = roomParticipants ? Array.from(roomParticipants.values()).find((p) => p.role === 'host') : null;
-
-        if (hostParticipant) {
-          socket.emit('waiting-admission', {
-            status: 'waiting_for_host_approval',
-            meetingTitle: meeting.title,
-          });
-
-          // Send real-time knock toast to the host
-          io.to(hostParticipant.socketId).emit('join-request', {
+          if (!waitingRooms.has(meetingCode)) {
+            waitingRooms.set(meetingCode, new Map());
+          }
+          waitingRooms.get(meetingCode)!.set(socket.id, {
             socketId: socket.id,
             userId,
             displayName: displayName || 'Student',
+            role: 'participant',
+            userType: profileMeta.userType || 'student',
+            rollNumber: profileMeta.rollNumber,
+            classGrade: profileMeta.classGrade,
+            bio: profileMeta.bio,
+            avatar: profileMeta.avatar,
             requestedAt: new Date().toISOString(),
+            socket,
           });
-          broadcastWaitingList(meetingCode);
-        } else {
-          // Host has not joined yet
-          socket.emit('waiting-admission', {
-            status: 'host_not_present',
-            meetingTitle: meeting.title,
-          });
+
+          const roomParticipants = rooms.get(meetingCode);
+          const hostParticipant = roomParticipants ? Array.from(roomParticipants.values()).find((p) => p.role === 'host') : null;
+
+          if (hostParticipant) {
+            socket.emit('waiting-admission', {
+              status: 'waiting_for_host_approval',
+              meetingTitle: meeting.title,
+            });
+
+            // Send real-time knock toast to the host
+            io.to(hostParticipant.socketId).emit('join-request', {
+              socketId: socket.id,
+              userId,
+              displayName: displayName || 'Student',
+              userType: profileMeta.userType || 'student',
+              rollNumber: profileMeta.rollNumber,
+              classGrade: profileMeta.classGrade,
+              avatar: profileMeta.avatar,
+              requestedAt: new Date().toISOString(),
+            });
+            broadcastWaitingList(meetingCode);
+          } else {
+            // Host has not joined yet
+            socket.emit('waiting-admission', {
+              status: 'host_not_present',
+              meetingTitle: meeting.title,
+            });
+          }
         }
+      } catch (err: any) {
+        console.error('[Signaling] Error in join-room handler:', err);
+        socket.emit('error', { message: err?.message || 'Error processing meeting join request' });
       }
-    } catch (err: any) {
-      console.error('[Signaling] Error in join-room handler:', err);
-      socket.emit('error', { message: err?.message || 'Error processing meeting join request' });
-    }
-  });
+    });
 
     // --- Host Admission Control Handlers ---
     socket.on('admit-participant', (data: any) => {
@@ -287,7 +356,13 @@ export function setupSignaling(io: Server) {
 
       const meeting: any = db.prepare('SELECT * FROM meetings WHERE LOWER(code) = ?').get(roomCode.toLowerCase());
       if (meeting) {
-        admitUserToRoom(waitingUser.socket, meeting, waitingUser.userId, waitingUser.displayName, 'participant');
+        admitUserToRoom(waitingUser.socket, meeting, waitingUser.userId, waitingUser.displayName, 'participant', {
+          userType: waitingUser.userType as any,
+          rollNumber: waitingUser.rollNumber,
+          classGrade: waitingUser.classGrade,
+          bio: waitingUser.bio,
+          avatar: waitingUser.avatar,
+        });
       }
       broadcastWaitingList(roomCode);
     });
@@ -319,10 +394,59 @@ export function setupSignaling(io: Server) {
       if (!meeting) return;
 
       waitingMap.forEach((waitingUser) => {
-        admitUserToRoom(waitingUser.socket, meeting, waitingUser.userId, waitingUser.displayName, 'participant');
+        admitUserToRoom(waitingUser.socket, meeting, waitingUser.userId, waitingUser.displayName, 'participant', {
+          userType: waitingUser.userType as any,
+          rollNumber: waitingUser.rollNumber,
+          classGrade: waitingUser.classGrade,
+          bio: waitingUser.bio,
+          avatar: waitingUser.avatar,
+        });
       });
       waitingMap.clear();
       broadcastWaitingList(roomCode);
+    });
+
+    // --- Profile Updates in Meeting ---
+    socket.on('update-profile', (data: {
+      displayName?: string;
+      bio?: string;
+      avatar?: string;
+      rollNumber?: string;
+      classGrade?: string;
+      userType?: 'teacher' | 'student';
+    }) => {
+      const roomCode = getSocketRoom(socket);
+      if (!roomCode || !rooms.has(roomCode)) return;
+      const participant = rooms.get(roomCode)!.get(socket.id);
+      if (participant) {
+        if (data.displayName) participant.displayName = data.displayName;
+        if (data.bio !== undefined) participant.bio = data.bio;
+        if (data.avatar !== undefined) participant.avatar = data.avatar;
+        if (data.rollNumber !== undefined) participant.rollNumber = data.rollNumber;
+        if (data.classGrade !== undefined) participant.classGrade = data.classGrade;
+        if (data.userType !== undefined) participant.userType = data.userType;
+
+        if (participant.userId) {
+          try {
+            db.prepare(`
+              UPDATE users
+              SET name = COALESCE(?, name),
+                  bio = COALESCE(?, bio),
+                  avatar = COALESCE(?, avatar),
+                  roll_number = COALESCE(?, roll_number),
+                  class_grade = COALESCE(?, class_grade)
+              WHERE id = ?
+            `).run(data.displayName || null, data.bio || null, data.avatar || null, data.rollNumber || null, data.classGrade || null, participant.userId);
+          } catch (e) {
+            console.error('Error updating user in DB from socket:', e);
+          }
+        }
+
+        io.to(roomCode).emit('participant-profile-updated', {
+          socketId: socket.id,
+          participant,
+        });
+      }
     });
 
     socket.on('cancel-waiting', () => {

@@ -2,7 +2,11 @@ import React, { useState } from 'react';
 import { X, Mic, MicOff, Video, VideoOff, Shield, UserX, Search, VolumeX } from 'lucide-react';
 import { useMeeting } from '../../context/MeetingContext.js';
 
-export const ParticipantsPanel: React.FC = () => {
+interface ParticipantsPanelProps {
+  onOpenProfile?: (participant: Participant) => void;
+}
+
+export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({ onOpenProfile }) => {
   const {
     participants,
     selfParticipant,
@@ -73,9 +77,20 @@ export const ParticipantsPanel: React.FC = () => {
 
           return (
             <div key={p.socketId} className="p-3.5 flex items-center justify-between hover:bg-white/5 transition-colors">
-              <div className="flex items-center space-x-3 truncate">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-700 text-white font-semibold flex items-center justify-center text-sm shrink-0">
-                  {p.displayName.charAt(0).toUpperCase()}
+              <button
+                type="button"
+                onClick={() => onOpenProfile?.(p)}
+                className="flex items-center space-x-3 truncate text-left flex-1 hover:opacity-85 transition-opacity cursor-pointer"
+                title={`Click to view ${p.displayName}'s profile`}
+              >
+                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-amber-500 to-orange-500 p-0.5 shrink-0 overflow-hidden">
+                  {p.avatar ? (
+                    <img src={p.avatar} alt={p.displayName} className="w-full h-full object-cover rounded-full" />
+                  ) : (
+                    <div className="w-full h-full rounded-full bg-[#202124] flex items-center justify-center text-xs font-bold text-amber-400">
+                      {p.displayName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
                 </div>
                 <div className="truncate">
                   <div className="flex items-center space-x-1.5 truncate">
@@ -83,17 +98,23 @@ export const ParticipantsPanel: React.FC = () => {
                       {p.displayName} {isSelf && '(You)'}
                     </span>
                     {p.role === 'host' && (
-                      <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-semibold flex items-center space-x-0.5">
+                      <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-semibold flex items-center space-x-0.5 shrink-0">
                         <Shield className="w-2.5 h-2.5 mr-0.5" />
                         Host
                       </span>
                     )}
                   </div>
-                  <span className="text-[11px] text-gray-400">
-                    {isSelf ? 'Meeting organizer / you' : 'Participant'}
-                  </span>
+                  <div className="flex items-center space-x-1.5 text-[11px] text-gray-400 truncate">
+                    {p.userType === 'student' ? (
+                      <span className="text-blue-400 font-mono font-medium truncate">
+                        {p.rollNumber || 'Student'} {p.classGrade ? `• ${p.classGrade}` : ''}
+                      </span>
+                    ) : (
+                      <span>{isSelf ? 'Meeting organizer (You)' : (p.role === 'host' ? 'Host Teacher' : 'Teacher')}</span>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </button>
 
               {/* Status Icons and Host Actions */}
               <div className="flex items-center space-x-1 shrink-0">
