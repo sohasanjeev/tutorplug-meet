@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
-import { db, generateTutorPlugCode, ensureUserPersonalRoom } from '../db/database.js';
+import { db, generateTutorPlugCode, ensureUserPersonalRoom, getOrCreateHostForCode } from '../db/database.js';
 import { StorageService } from '../services/storage.js';
 
 import jwt from 'jsonwebtoken';
@@ -189,15 +189,8 @@ meetingsRouter.get('/code/:code', (req: Request, res: Response) => {
         meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(meetingId);
       } else if (code.startsWith('tp-')) {
         // Auto-provision permanent room for tutor by name slug so students can join reliably
-        const parts = code.split('-');
-        const rawName = parts[1] || 'Tutor';
-        const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+        const { hostId, hostName } = getOrCreateHostForCode(code, undefined, authUser?.id);
         const meetingId = uuidv4();
-        
-        // Find if user with matching name prefix exists
-        const matchedUser: any = db.prepare('SELECT id, name FROM users WHERE LOWER(name) LIKE ? LIMIT 1').get(`%${rawName}%`);
-        const hostId = matchedUser ? matchedUser.id : (authUser ? authUser.id : `host_${uuidv4().slice(0, 8)}`);
-        const hostName = matchedUser ? matchedUser.name : (authUser ? authUser.name : formattedName);
 
         db.prepare(`
           INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)

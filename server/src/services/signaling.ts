@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
-import { db } from '../db/database.js';
+import { db, getOrCreateHostForCode } from '../db/database.js';
 import { RecordingManager } from './recordingManager.js';
 
 interface Participant {
@@ -82,10 +82,11 @@ export function setupSignaling(io: Server) {
       roomParticipants.set(targetSocket.id, newParticipant);
 
       try {
+        const userExists = userId ? db.prepare('SELECT id FROM users WHERE id = ?').get(userId) : null;
         db.prepare(`
           INSERT INTO meeting_participants (id, meeting_id, user_id, display_name, role)
           VALUES (?, ?, ?, ?, ?)
-        `).run(uuidv4(), meeting.id, userId, newParticipant.displayName, newParticipant.role);
+        `).run(uuidv4(), meeting.id, userExists ? userId : null, newParticipant.displayName, newParticipant.role);
       } catch (err) {
         console.error('Error logging participant:', err);
       }
@@ -144,11 +145,7 @@ export function setupSignaling(io: Server) {
           `).run(newId, user.personal_meeting_code, `${user.name}'s Tutoring Room`, 'Permanent Tutoring Room for TutorPlug', user.id);
           meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(newId);
         } else if (meetingCode.toLowerCase().startsWith('tp-')) {
-          const codeParts = meetingCode.split('-');
-          const slug = (codeParts[1] || '').toLowerCase();
-          const matchedUser: any = slug.length >= 3 ? db.prepare('SELECT id, name FROM users WHERE LOWER(name) LIKE ? LIMIT 1').get(`%${slug}%`) : null;
-          const hostId = matchedUser ? matchedUser.id : (userId || uuidv4());
-          const hostName = matchedUser ? matchedUser.name : (displayName || 'Tutor');
+          const { hostId, hostName } = getOrCreateHostForCode(meetingCode.toLowerCase(), displayName, userId);
           const newId = uuidv4();
           db.prepare(`
             INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)

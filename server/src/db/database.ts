@@ -211,6 +211,69 @@ export function ensureUserPersonalRoom(userId: string, userName: string): { code
   return { code, meetingId };
 }
 
+/**
+ * Resolves or safely provisions a valid user ID for a meeting code, guaranteeing foreign key integrity
+ */
+export function getOrCreateHostForCode(
+  meetingCode: string,
+  preferredName?: string,
+  userIdCandidate?: string
+): { hostId: string; hostName: string } {
+  // 1. If candidate ID exists in users table, use it
+  if (userIdCandidate) {
+    const candidateUser: any = db.prepare('SELECT id, name FROM users WHERE id = ?').get(userIdCandidate);
+    if (candidateUser) {
+      return { hostId: candidateUser.id, hostName: candidateUser.name };
+    }
+  }
+
+  // 2. Check if a user owns this personal meeting code
+  const codeOwner: any = db.prepare('SELECT id, name FROM users WHERE LOWER(personal_meeting_code) = ?').get(meetingCode.toLowerCase());
+  if (codeOwner) {
+    return { hostId: codeOwner.id, hostName: codeOwner.name };
+  }
+
+  // 3. Check if any user matches the code slug (e.g. "sanjee" from tp-sanjee-rb27)
+  const parts = meetingCode.split('-');
+  const rawSlug = (parts[1] || 'tutor').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (rawSlug.length >= 3) {
+    const matchedUser: any = db.prepare('SELECT id, name FROM users WHERE LOWER(name) LIKE ? LIMIT 1').get(`%${rawSlug}%`);
+    if (matchedUser) {
+      return { hostId: matchedUser.id, hostName: matchedUser.name };
+    }
+  }
+
+  // 4. Formulate clean name
+  const cleanName = preferredName?.trim() || (rawSlug.charAt(0).toUpperCase() + rawSlug.slice(1));
+  const tutorEmail = `${rawSlug || 'tutor'}_${meetingCode.replace(/[^a-z0-9]/gi, '').slice(0, 10).toLowerCase()}@tutorplug.com`;
+
+  // 5. Check if user with this email already exists
+  const existingByEmail: any = db.prepare('SELECT id, name FROM users WHERE email = ?').get(tutorEmail);
+  if (existingByEmail) {
+    return { hostId: existingByEmail.id, hostName: existingByEmail.name };
+  }
+
+  // 6. Create valid user in DB so foreign key is guaranteed
+  try {
+    const newUserId = uuidv4();
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync('Tutor@123456', salt);
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, role, personal_meeting_code)
+      VALUES (?, ?, ?, ?, 'user', ?)
+    `).run(newUserId, cleanName, tutorEmail, hash, meetingCode.toLowerCase());
+    return { hostId: newUserId, hostName: cleanName };
+  } catch {
+    // Fallback to admin if collision
+    const admin: any = db.prepare("SELECT id, name FROM users WHERE role = 'admin' LIMIT 1").get();
+    if (admin) {
+      return { hostId: admin.id, hostName: cleanName };
+    }
+    const anyUser: any = db.prepare('SELECT id, name FROM users LIMIT 1').get();
+    return { hostId: anyUser ? anyUser.id : uuidv4(), hostName: cleanName };
+  }
+}
+
 function seedDefaultUsers() {
   const checkAdmin: any = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@tutorplug.com');
   if (!checkAdmin) {
@@ -234,5 +297,30 @@ function seedDefaultUsers() {
       VALUES (?, ?, ?, ?, 'user', 1)
     `).run(demoId, 'Sarah Jenkins (Tutor)', 'tutor@tutorplug.com', hash);
     ensureUserPersonalRoom(demoId, 'Sarah');
+  }
+
+  // Pre-seed Sanjeev's permanent room
+  const checkSanjeev: any = db.prepare('SELECT id FROM users WHERE email = ? OR LOWER(personal_meeting_code) = ?').get('sanjeev@tutorplug.com', 'tp-sanjee-rb27');
+  if (!checkSanjeev) {
+    const sanjeevId = uuidv4();
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync('Sanjeev@123', salt);
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, role, allowed_link_quota, personal_meeting_code)
+      VALUES (?, ?, ?, ?, 'admin', 10, 'tp-sanjee-rb27')
+    `).run(sanjeevId, 'Sanjeev', 'sanjeev@tutorplug.com', hash);
+
+    const existingMeeting: any = db.prepare('SELECT id FROM meetings WHERE LOWER(code) = ?').get('tp-sanjee-rb27');
+    if (!existingMeeting) {
+      const meetingId = uuidv4();
+      db.prepare(`
+        INSERT INTO meetings (id, code, title, description, host_id, status, is_permanent)
+        VALUES (?, 'tp-sanjee-rb27', 'Sanjeev''s Tutoring Room', 'Permanent Tutoring Room for TutorPlug', ?, 'active', 1)
+      `).run(meetingId, sanjeevId);
+      db.prepare('UPDATE users SET personal_meeting_id = ? WHERE id = ?').run(meetingId, sanjeevId);
+    } else {
+      db.prepare('UPDATE meetings SET host_id = ? WHERE id = ?').run(sanjeevId, existingMeeting.id);
+      db.prepare('UPDATE users SET personal_meeting_id = ? WHERE id = ?').run(existingMeeting.id, sanjeevId);
+    }
   }
 }
