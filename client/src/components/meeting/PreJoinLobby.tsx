@@ -137,8 +137,10 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
     user && meetingHostId && user.id === meetingHostId
   );
 
-  // 3. User is an admin
-  const isAdmin = Boolean(user && user.role === 'admin');
+  // 3. User is an admin or teacher
+  const ADMIN_EMAILS = ['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'];
+  const isAdmin = Boolean(user && (user.role === 'admin' || ADMIN_EMAILS.includes((user.email || '').toLowerCase())));
+  const isTeacher = Boolean(user && (user.userType === 'teacher' || user.role === 'teacher'));
 
   // 4. URL explicitly has role=host
   const hashOrSearch = (window.location.hash || '') + (window.location.search || '');
@@ -149,12 +151,13 @@ export const PreJoinLobby: React.FC<PreJoinLobbyProps> = ({
   const slugMatchesUser = Boolean(
     codeSlug && codeSlug.length >= 3 && (
       (user?.name && user.name.toLowerCase().includes(codeSlug)) ||
+      (user?.email && user.email.toLowerCase().includes(codeSlug)) ||
       (displayName && displayName.trim().toLowerCase().includes(codeSlug))
     )
   );
 
   // Auto-calculated host status
-  const calculatedIsHost = ownsRoom || isDirectHostId || isAdmin || hasHostUrlParam || slugMatchesUser;
+  const calculatedIsHost = ownsRoom || isDirectHostId || isAdmin || hasHostUrlParam || slugMatchesUser || (isTeacher && !user?.userType?.includes('student'));
 
   // Effective isHost
   const isHost = isHostOverride !== null ? isHostOverride : calculatedIsHost;

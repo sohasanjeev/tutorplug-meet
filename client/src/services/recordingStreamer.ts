@@ -85,6 +85,10 @@ export class RecordingStreamer {
         this.audioDestination = this.audioContext.createMediaStreamDestination();
       }
 
+      if (this.audioContext && this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
+
       // Add local audio
       if (this.localStream && this.localStream.getAudioTracks().length > 0) {
         const audioTrack = this.localStream.getAudioTracks()[0];
@@ -118,21 +122,31 @@ export class RecordingStreamer {
     // Start render loop
     this.startCanvasRenderLoop();
 
-    // Capture canvas video stream
-    const canvasStream = (this.canvas as any).captureStream ? this.canvas.captureStream(25) : null;
-    if (!canvasStream) {
-      console.warn('[RecordingStreamer] captureStream not supported in this browser');
-      return;
+    // Ensure audio context is running
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
     }
+
+    // Capture canvas video stream with fallback
+    const canvasStream = (this.canvas as any).captureStream ? this.canvas.captureStream(25) : null;
 
     // Combine video with mixed audio
     const combinedStream = new MediaStream();
-    canvasStream.getVideoTracks().forEach((vt: MediaStreamTrack) => combinedStream.addTrack(vt));
+
+    if (canvasStream && canvasStream.getVideoTracks().length > 0) {
+      canvasStream.getVideoTracks().forEach((vt: MediaStreamTrack) => combinedStream.addTrack(vt));
+    } else if (this.localStream && this.localStream.getVideoTracks().length > 0) {
+      combinedStream.addTrack(this.localStream.getVideoTracks()[0]);
+    }
 
     if (this.audioDestination && this.audioDestination.stream.getAudioTracks().length > 0) {
       this.audioDestination.stream.getAudioTracks().forEach((at: MediaStreamTrack) => combinedStream.addTrack(at));
     } else if (this.localStream && this.localStream.getAudioTracks().length > 0) {
       combinedStream.addTrack(this.localStream.getAudioTracks()[0]);
+    }
+
+    if (combinedStream.getTracks().length === 0 && this.localStream) {
+      this.localStream.getTracks().forEach((t) => combinedStream.addTrack(t));
     }
 
     // Determine supported mimeType

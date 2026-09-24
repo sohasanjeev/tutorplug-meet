@@ -339,8 +339,9 @@ function seedDefaultUsers() {
   }
 
   // Enforce strict admin isolation: only designated admin emails retain admin role
-  db.prepare("UPDATE users SET role = 'admin', user_type = 'admin' WHERE LOWER(email) IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com')").run();
-  db.prepare("UPDATE users SET role = 'teacher', user_type = 'teacher' WHERE LOWER(email) NOT IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com') AND role = 'admin'").run();
+  const ADMIN_EMAILS = ['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'];
+  db.prepare("UPDATE users SET role = 'admin', user_type = 'admin' WHERE LOWER(email) IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com')").run();
+  db.prepare("UPDATE users SET role = 'teacher', user_type = 'teacher' WHERE LOWER(email) NOT IN ('admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com') AND role = 'admin'").run();
 
   // Finalize any dangling recordings from previous sessions so they appear ready
   try {

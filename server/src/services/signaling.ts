@@ -43,6 +43,8 @@ export function setupSignaling(io: Server) {
   const socketToRoomMap: Map<string, string> = new Map();
   // Map of socketId -> meetingId
   const socketToMeetingIdMap: Map<string, string> = new Map();
+  // Map of meetingCode -> socketId of the active designated streamer
+  const roomStreamerMap: Map<string, string> = new Map();
 
   const getSocketRoom = (s: Socket): string | null => (s as any).currentMeetingCode || socketToRoomMap.get(s.id) || null;
   const getSocketMeetingId = (s: Socket): string | null => (s as any).currentMeetingId || socketToMeetingIdMap.get(s.id) || null;
@@ -140,8 +142,21 @@ export function setupSignaling(io: Server) {
         console.error('Error logging participant:', err);
       }
 
+      // Ensure meeting status is active so permanent rooms can be reused perpetually
+      if (meeting.status !== 'active') {
+        try {
+          db.prepare("UPDATE meetings SET status = 'active' WHERE id = ?").run(meeting.id);
+          meeting.status = 'active';
+        } catch {}
+      }
+
       // Automatically start continuous recording on first join
       const recordingStatus = RecordingManager.startRecording(meeting.id);
+
+      // Designate active recorder streamer (host preferred)
+      if (role === 'host' || !roomStreamerMap.has(meetingCode)) {
+        roomStreamerMap.set(meetingCode, targetSocket.id);
+      }
 
       const existingParticipants = Array.from(roomParticipants.values()).filter((p) => p.socketId !== targetSocket.id);
 
@@ -151,6 +166,7 @@ export function setupSignaling(io: Server) {
         meetingTitle: meeting.title,
         self: newParticipant,
         participants: existingParticipants,
+        isStreamer: roomStreamerMap.get(meetingCode) === targetSocket.id,
         recording: {
           isRecording: true,
           recordingId: recordingStatus.recordingId,
@@ -227,12 +243,17 @@ export function setupSignaling(io: Server) {
           codeSlug.length >= 3 && displayName.toLowerCase().includes(codeSlug)
         );
 
+        const ADMIN_EMAILS = ['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'];
+
         // Check user record in database
-        const userInDb: any = userId ? db.prepare('SELECT id, name, role, personal_meeting_code FROM users WHERE id = ?').get(userId) : null;
+        const userInDb: any = userId ? db.prepare('SELECT id, name, email, role, personal_meeting_code FROM users WHERE id = ?').get(userId) : null;
         const ownsMeetingCode = Boolean(
           userInDb && userInDb.personal_meeting_code && userInDb.personal_meeting_code.toLowerCase() === meetingCode.toLowerCase()
         );
-        const isDbAdmin = Boolean(userInDb && userInDb.role === 'admin');
+        const isDbAdmin = Boolean(
+          (userInDb && (userInDb.role === 'admin' || ADMIN_EMAILS.includes((userInDb.email || '').toLowerCase()))) ||
+          (data?.email && ADMIN_EMAILS.includes(data.email.toLowerCase()))
+        );
 
         // Check current room occupancy
         const currentParticipants = rooms.get(meetingCode);
@@ -246,7 +267,11 @@ export function setupSignaling(io: Server) {
           meeting.host_id === userId ||
           isDbAdmin ||
           ownsMeetingCode ||
-          (!hasActiveHostInRoom && (nameMatchesSlug || (isRoomEmpty && requestedRole !== 'student')));
+          (!hasActiveHostInRoom && (
+            nameMatchesSlug ||
+            isRoomEmpty ||
+            requestedRole !== 'student'
+          ));
 
         if (isHost) {
           // Ensure meeting record reflects this host if needed
@@ -589,10 +614,19 @@ export function setupSignaling(io: Server) {
 
     // --- 8. Continuous Server-Side Recording Ingest ---
     socket.on('recording-chunk', (chunk: ArrayBuffer | Buffer) => {
+      const roomCode = getSocketRoom(socket);
       const mId = getSocketMeetingId(socket);
-      if (mId) {
-        RecordingManager.appendChunk(mId, chunk);
+      if (!roomCode || !mId) return;
+
+      const designated = roomStreamerMap.get(roomCode);
+      if (!designated) {
+        roomStreamerMap.set(roomCode, socket.id);
+      } else if (designated !== socket.id) {
+        // Drop chunks from secondary participants to avoid WebM container interleaving corruption
+        return;
       }
+
+      RecordingManager.appendChunk(mId, chunk);
     });
 
     // --- 9. Host Moderation Controls ---
@@ -632,8 +666,9 @@ export function setupSignaling(io: Server) {
         recording: recordingRecord,
       });
 
-      // Clear memory room
+      // Clear memory room & streamer
       rooms.delete(roomCode);
+      roomStreamerMap.delete(roomCode);
     });
 
     // --- 10. Disconnect Handling ---
@@ -656,6 +691,10 @@ export function setupSignaling(io: Server) {
       socketToRoomMap.delete(socket.id);
       socketToMeetingIdMap.delete(socket.id);
 
+      if (roomCode && roomStreamerMap.get(roomCode) === socket.id) {
+        roomStreamerMap.delete(roomCode);
+      }
+
       if (roomCode && rooms.has(roomCode)) {
         const roomParticipants = rooms.get(roomCode)!;
         const participant = roomParticipants.get(socket.id);
@@ -671,6 +710,7 @@ export function setupSignaling(io: Server) {
         // If last participant left room, automatically stop and seal recording
         if (roomParticipants.size === 0) {
           rooms.delete(roomCode);
+          roomStreamerMap.delete(roomCode);
           if (mId) {
             console.log(`[Signaling] Room ${roomCode} is empty. Sealing continuous recording.`);
             await RecordingManager.stopRecording(mId);
@@ -679,6 +719,16 @@ export function setupSignaling(io: Server) {
               SET status = 'ended', ended_at = datetime('now')
               WHERE id = ? AND status = 'active'
             `).run(mId);
+          }
+        } else {
+          // If the designated streamer left but others remain, designate next participant
+          if (!roomStreamerMap.has(roomCode)) {
+            const nextHost = Array.from(roomParticipants.values()).find((p) => p.role === 'host');
+            const nextSocketId = nextHost ? nextHost.socketId : roomParticipants.keys().next().value;
+            if (nextSocketId) {
+              roomStreamerMap.set(roomCode, nextSocketId);
+              io.to(nextSocketId).emit('designated-streamer-assigned');
+            }
           }
         }
       }

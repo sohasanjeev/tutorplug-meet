@@ -294,18 +294,39 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setIsRecording(true);
         }
 
-        try {
-          const streamer = new RecordingStreamer(newSocket);
-          streamer.updateMedia({
-            localStream: stream,
-            tutorName: displayName,
-            meetingTitle: data.meetingTitle,
-          });
-          recordingStreamerRef.current = streamer;
-          streamer.start();
-        } catch (streamerErr) {
-          console.warn('[MeetingContext] Recording streamer note:', streamerErr);
+        // Only designated streamer records to prevent multi-client WebM interleaving corruption
+        const shouldStream = Boolean(data.isStreamer || data.self?.role === 'host' || (!data.participants || data.participants.length === 0));
+        if (shouldStream) {
+          try {
+            const streamer = new RecordingStreamer(newSocket);
+            streamer.updateMedia({
+              localStream: stream,
+              tutorName: displayName,
+              meetingTitle: data.meetingTitle,
+            });
+            recordingStreamerRef.current = streamer;
+            streamer.start();
+          } catch (streamerErr) {
+            console.warn('[MeetingContext] Recording streamer note:', streamerErr);
+          }
         }
+
+        newSocket.on('designated-streamer-assigned', () => {
+          if (!recordingStreamerRef.current) {
+            try {
+              const streamer = new RecordingStreamer(newSocket);
+              streamer.updateMedia({
+                localStream: stream,
+                tutorName: displayName,
+                meetingTitle: data.meetingTitle,
+              });
+              recordingStreamerRef.current = streamer;
+              streamer.start();
+            } catch (streamerErr) {
+              console.warn('[MeetingContext] Fallback recording streamer note:', streamerErr);
+            }
+          }
+        });
 
         data.participants.forEach((p: Participant) => {
           rtcManager.createPeerConnection(p.socketId, true);

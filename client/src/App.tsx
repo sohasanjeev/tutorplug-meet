@@ -49,7 +49,7 @@ const AdminSecurityGate: React.FC<{ onBackToHome: () => void }> = ({ onBackToHom
           </p>
         </div>
 
-        {user && user.role !== 'admin' && (
+        {user && user.role !== 'admin' && !['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'].includes((user.email || '').toLowerCase()) && (
           <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-500 text-xs text-left space-y-2">
             <div>
               ⚠️ You are currently signed in as <strong>{user.email}</strong>, which does not have executive administrator privileges.
@@ -241,7 +241,7 @@ const AppContent: React.FC = () => {
           />
         )}
         {currentView === 'admin' && (
-          user?.role === 'admin' ? (
+          (user?.role === 'admin' || (user?.email && ['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'].includes(user.email.toLowerCase()))) ? (
             <AdminDashboard onBackToHome={() => handleNavigate('home')} />
           ) : (
             <AdminSecurityGate onBackToHome={() => handleNavigate('home')} />

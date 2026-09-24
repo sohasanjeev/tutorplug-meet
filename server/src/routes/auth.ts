@@ -7,8 +7,10 @@ import { CONFIG } from '../config.js';
 
 export const authRouter = Router();
 
+export const ADMIN_EMAILS = ['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'];
+
 function buildUserProfile(user: any) {
-  const isDedicatedAdmin = ['admin@tutorplug.com', 'sanjeev@tutorplug.com'].includes((user.email || '').toLowerCase());
+  const isDedicatedAdmin = ADMIN_EMAILS.includes((user.email || '').toLowerCase()) || user.role === 'admin';
   const effectiveRole = isDedicatedAdmin ? 'admin' : (user.role === 'admin' ? 'teacher' : (user.role || (user.user_type === 'student' ? 'student' : 'teacher')));
   const effectiveUserType = isDedicatedAdmin ? 'admin' : (user.user_type || (effectiveRole === 'student' ? 'student' : 'teacher'));
 
@@ -39,7 +41,7 @@ authRouter.post('/google', (req: Request, res: Response) => {
     const cleanEmail = email.toLowerCase().trim();
     let user: any = db.prepare('SELECT * FROM users WHERE email = ? OR google_id = ?').get(cleanEmail, googleId || '');
 
-    const isDedicatedAdmin = ['admin@tutorplug.com', 'sanjeev@tutorplug.com'].includes(cleanEmail);
+    const isDedicatedAdmin = ADMIN_EMAILS.includes(cleanEmail);
     const assignedUserType = isDedicatedAdmin ? 'admin' : (userType === 'student' ? 'student' : 'teacher');
     const assignedRole = assignedUserType;
 
@@ -108,7 +110,7 @@ authRouter.post('/register', (req: Request, res: Response) => {
       return;
     }
 
-    const isDedicatedAdmin = ['admin@tutorplug.com', 'sanjeev@tutorplug.com'].includes(cleanEmail);
+    const isDedicatedAdmin = ADMIN_EMAILS.includes(cleanEmail);
     const assignedUserType = isDedicatedAdmin ? 'admin' : (userType === 'student' ? 'student' : 'teacher');
     const assignedRole = assignedUserType;
     const assignedRollNumber = assignedUserType === 'student'

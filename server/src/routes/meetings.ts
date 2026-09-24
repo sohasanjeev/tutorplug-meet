@@ -10,17 +10,29 @@ import { CONFIG } from '../config.js';
 
 export const meetingsRouter = Router();
 
+const ADMIN_EMAILS = ['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'];
+
 function getAuthUser(req: Request): any {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
     try {
-      return jwt.verify(token, CONFIG.JWT_SECRET);
+      const decoded: any = jwt.verify(token, CONFIG.JWT_SECRET);
+      if (decoded && ADMIN_EMAILS.includes((decoded.email || '').toLowerCase())) {
+        decoded.role = 'admin';
+        decoded.userType = 'admin';
+      }
+      return decoded;
     } catch {}
   }
   const queryUserId = (req.query.userId as string) || (req.headers['x-user-id'] as string);
   if (queryUserId) {
-    return db.prepare('SELECT id, name, email, role FROM users WHERE id = ?').get(queryUserId);
+    const user: any = db.prepare('SELECT id, name, email, role, user_type, personal_meeting_code FROM users WHERE id = ?').get(queryUserId);
+    if (user && ADMIN_EMAILS.includes((user.email || '').toLowerCase())) {
+      user.role = 'admin';
+      user.user_type = 'admin';
+    }
+    return user;
   }
   return null;
 }
@@ -243,70 +255,185 @@ meetingsRouter.get('/code/:code', (req: Request, res: Response) => {
 meetingsRouter.get('/history/all', (req: Request, res: Response) => {
   try {
     const authUser = getAuthUser(req);
-    let meetings: any[] = [];
+    let items: any[] = [];
 
-    if (authUser && authUser.role === 'admin') {
+    const isAdmin = Boolean(
+      authUser && (
+        authUser.role === 'admin' ||
+        ADMIN_EMAILS.includes((authUser.email || '').toLowerCase())
+      )
+    );
+
+    if (isAdmin) {
       // Administrator: full visibility into all clients, students, and teachers' classes and recordings
-      meetings = db.prepare(`
+      // 1. All actual recording sessions
+      const recordingsWithMeetings: any[] = db.prepare(`
         SELECT 
-          m.*,
-          u.name AS host_name,
-          u.email AS host_email,
+          r.id AS id,
           r.id AS recording_id,
+          r.meeting_id,
           r.file_name AS recording_file_name,
           r.duration_seconds AS recording_duration,
           r.size_bytes AS recording_size_bytes,
           r.status AS recording_status,
+          COALESCE(r.started_at, r.created_at, m.created_at) AS created_at,
+          r.started_at,
+          r.ended_at,
+          m.code,
+          m.title,
+          m.description,
+          m.host_id,
+          m.is_permanent,
+          u.name AS host_name,
+          u.email AS host_email,
+          (SELECT COUNT(*) FROM meeting_participants WHERE meeting_id = m.id) AS participant_count,
+          (SELECT COUNT(*) FROM messages WHERE meeting_id = m.id) AS message_count
+        FROM recordings r
+        JOIN meetings m ON m.id = r.meeting_id
+        LEFT JOIN users u ON u.id = m.host_id
+        WHERE (r.duration_seconds >= 2 OR r.size_bytes > 5000 OR r.status = 'recording')
+        ORDER BY COALESCE(r.started_at, r.created_at) DESC
+      `).all();
+
+      // 2. Any scheduled or active rooms that have no recordings yet
+      const meetingsWithoutRec: any[] = db.prepare(`
+        SELECT 
+          m.id AS id,
+          NULL AS recording_id,
+          m.id AS meeting_id,
+          NULL AS recording_file_name,
+          0 AS recording_duration,
+          0 AS recording_size_bytes,
+          'none' AS recording_status,
+          m.created_at AS created_at,
+          m.started_at,
+          m.ended_at,
+          m.code,
+          m.title,
+          m.description,
+          m.host_id,
+          m.is_permanent,
+          u.name AS host_name,
+          u.email AS host_email,
           (SELECT COUNT(*) FROM meeting_participants WHERE meeting_id = m.id) AS participant_count,
           (SELECT COUNT(*) FROM messages WHERE meeting_id = m.id) AS message_count
         FROM meetings m
         LEFT JOIN users u ON u.id = m.host_id
-        LEFT JOIN recordings r ON r.id = (
-          SELECT id FROM recordings WHERE meeting_id = m.id ORDER BY created_at DESC LIMIT 1
+        WHERE m.id NOT IN (
+          SELECT DISTINCT meeting_id FROM recordings 
+          WHERE duration_seconds >= 2 OR size_bytes > 5000 OR status = 'recording'
         )
         ORDER BY m.created_at DESC
       `).all();
+
+      items = [...recordingsWithMeetings, ...meetingsWithoutRec];
     } else if (authUser && authUser.id) {
-      // Regular User (Teacher or Student): see all meetings hosted or attended
-      meetings = db.prepare(`
+      // Regular User (Teacher or Student): see all recording sessions for meetings they hosted, attended, or own
+      const recordingsWithMeetings: any[] = db.prepare(`
         SELECT 
-          m.*,
-          u.name AS host_name,
-          u.email AS host_email,
+          r.id AS id,
           r.id AS recording_id,
+          r.meeting_id,
           r.file_name AS recording_file_name,
           r.duration_seconds AS recording_duration,
           r.size_bytes AS recording_size_bytes,
           r.status AS recording_status,
+          COALESCE(r.started_at, r.created_at, m.created_at) AS created_at,
+          r.started_at,
+          r.ended_at,
+          m.code,
+          m.title,
+          m.description,
+          m.host_id,
+          m.is_permanent,
+          u.name AS host_name,
+          u.email AS host_email,
+          (SELECT COUNT(*) FROM meeting_participants WHERE meeting_id = m.id) AS participant_count,
+          (SELECT COUNT(*) FROM messages WHERE meeting_id = m.id) AS message_count
+        FROM recordings r
+        JOIN meetings m ON m.id = r.meeting_id
+        LEFT JOIN users u ON u.id = m.host_id
+        WHERE (r.duration_seconds >= 2 OR r.size_bytes > 5000 OR r.status = 'recording')
+          AND (
+            m.host_id = ?
+            OR m.id IN (SELECT meeting_id FROM meeting_participants WHERE user_id = ? OR LOWER(display_name) = LOWER(?))
+            OR m.id IN (SELECT meeting_id FROM messages WHERE sender_id = ?)
+            OR m.code = (SELECT personal_meeting_code FROM users WHERE id = ?)
+          )
+        ORDER BY COALESCE(r.started_at, r.created_at) DESC
+      `).all(authUser.id, authUser.id, authUser.name || '', authUser.id, authUser.id);
+
+      const meetingsWithoutRec: any[] = db.prepare(`
+        SELECT 
+          m.id AS id,
+          NULL AS recording_id,
+          m.id AS meeting_id,
+          NULL AS recording_file_name,
+          0 AS recording_duration,
+          0 AS recording_size_bytes,
+          'none' AS recording_status,
+          m.created_at AS created_at,
+          m.started_at,
+          m.ended_at,
+          m.code,
+          m.title,
+          m.description,
+          m.host_id,
+          m.is_permanent,
+          u.name AS host_name,
+          u.email AS host_email,
           (SELECT COUNT(*) FROM meeting_participants WHERE meeting_id = m.id) AS participant_count,
           (SELECT COUNT(*) FROM messages WHERE meeting_id = m.id) AS message_count
         FROM meetings m
         LEFT JOIN users u ON u.id = m.host_id
-        LEFT JOIN recordings r ON r.id = (
-          SELECT id FROM recordings WHERE meeting_id = m.id ORDER BY created_at DESC LIMIT 1
+        WHERE m.id NOT IN (
+          SELECT DISTINCT meeting_id FROM recordings 
+          WHERE duration_seconds >= 2 OR size_bytes > 5000 OR status = 'recording'
         )
-        WHERE m.host_id = ?
-           OR m.id IN (SELECT meeting_id FROM meeting_participants WHERE user_id = ? OR LOWER(display_name) = LOWER(?))
-           OR m.id IN (SELECT meeting_id FROM messages WHERE sender_id = ?)
-           OR m.code = (SELECT personal_meeting_code FROM users WHERE id = ?)
+        AND (
+          m.host_id = ?
+          OR m.id IN (SELECT meeting_id FROM meeting_participants WHERE user_id = ? OR LOWER(display_name) = LOWER(?))
+          OR m.id IN (SELECT meeting_id FROM messages WHERE sender_id = ?)
+          OR m.code = (SELECT personal_meeting_code FROM users WHERE id = ?)
+        )
         ORDER BY m.created_at DESC
       `).all(authUser.id, authUser.id, authUser.name || '', authUser.id, authUser.id);
+
+      items = [...recordingsWithMeetings, ...meetingsWithoutRec];
     } else {
       // Anonymous / Unauthenticated: return empty list
-      meetings = [];
+      items = [];
     }
 
-    res.json({ meetings });
+    res.json({ meetings: items });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to fetch meeting history' });
   }
 });
 
 // 6. Meeting Detail (recording, participants, chat transcript, shared media)
+// Accepts either recording.id OR meeting.id / code
 meetingsRouter.get('/detail/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const meeting: any = db.prepare('SELECT * FROM meetings WHERE id = ? OR code = ?').get(id, id);
+    let recording: any = db.prepare('SELECT * FROM recordings WHERE id = ?').get(id);
+    let meeting: any = null;
+
+    if (recording) {
+      meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(recording.meeting_id);
+    } else {
+      meeting = db.prepare('SELECT * FROM meetings WHERE id = ? OR LOWER(code) = ?').get(id, id.toLowerCase());
+      if (meeting) {
+        recording = db.prepare(`
+          SELECT * FROM recordings 
+          WHERE meeting_id = ? AND (duration_seconds >= 2 OR size_bytes > 5000 OR status = 'recording')
+          ORDER BY created_at DESC LIMIT 1
+        `).get(meeting.id);
+        if (!recording) {
+          recording = db.prepare('SELECT * FROM recordings WHERE meeting_id = ? ORDER BY created_at DESC LIMIT 1').get(meeting.id);
+        }
+      }
+    }
 
     if (!meeting) {
       res.status(404).json({ error: 'Meeting not found' });
@@ -314,8 +441,15 @@ meetingsRouter.get('/detail/:id', (req: Request, res: Response) => {
     }
 
     const authUser = getAuthUser(req);
-    if (authUser && authUser.role !== 'admin' && meeting.host_id && meeting.host_id !== authUser.id) {
-      // Check if user was an attendee/participant or sent messages in this meeting
+    const isAdmin = Boolean(
+      authUser && (
+        authUser.role === 'admin' ||
+        ADMIN_EMAILS.includes((authUser.email || '').toLowerCase())
+      )
+    );
+
+    if (authUser && !isAdmin && meeting.host_id && meeting.host_id !== authUser.id) {
+      // Check if user was an attendee/participant, sent messages, or owns room code
       const isParticipant = db.prepare(`
         SELECT 1 FROM meeting_participants 
         WHERE meeting_id = ? AND (user_id = ? OR LOWER(display_name) = LOWER(?))
@@ -325,13 +459,16 @@ meetingsRouter.get('/detail/:id', (req: Request, res: Response) => {
         SELECT 1 FROM messages WHERE meeting_id = ? AND sender_id = ?
       `).get(meeting.id, authUser.id);
 
-      if (!isParticipant && !isSender) {
+      const isRoomOwner = db.prepare(`
+        SELECT 1 FROM users WHERE id = ? AND LOWER(personal_meeting_code) = LOWER(?)
+      `).get(authUser.id, meeting.code);
+
+      if (!isParticipant && !isSender && !isRoomOwner) {
         res.status(403).json({ error: 'Access denied: You can only view recordings for classes you hosted or attended.' });
         return;
       }
     }
 
-    const recording: any = db.prepare('SELECT * FROM recordings WHERE meeting_id = ? ORDER BY created_at DESC LIMIT 1').get(meeting.id);
     const participants: any[] = db.prepare('SELECT * FROM meeting_participants WHERE meeting_id = ? ORDER BY joined_at ASC').all(meeting.id);
     const messages: any[] = db.prepare('SELECT * FROM messages WHERE meeting_id = ? ORDER BY created_at ASC').all(meeting.id);
     const files: any[] = db.prepare('SELECT * FROM uploaded_files WHERE meeting_id = ? ORDER BY created_at ASC').all(meeting.id);
@@ -352,7 +489,14 @@ meetingsRouter.get('/detail/:id', (req: Request, res: Response) => {
 meetingsRouter.get('/:id/chat/download', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const meeting: any = db.prepare('SELECT * FROM meetings WHERE id = ? OR code = ?').get(id, id);
+    let meeting: any = db.prepare('SELECT * FROM meetings WHERE id = ? OR LOWER(code) = ?').get(id, id.toLowerCase());
+    if (!meeting) {
+      const rec: any = db.prepare('SELECT meeting_id FROM recordings WHERE id = ?').get(id);
+      if (rec) {
+        meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(rec.meeting_id);
+      }
+    }
+
     if (!meeting) {
       res.status(404).json({ error: 'Meeting not found' });
       return;
@@ -399,11 +543,21 @@ meetingsRouter.get('/:id/chat/download', (req: Request, res: Response) => {
 });
 
 
-// 7. Stream Recording Video
+// 7. Stream Recording Video (accepts recording.id OR meeting.id)
 meetingsRouter.get('/:id/recording/stream', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const recording: any = db.prepare('SELECT * FROM recordings WHERE id = ? OR meeting_id = ?').get(id, id);
+    let recording: any = db.prepare('SELECT * FROM recordings WHERE id = ?').get(id);
+    if (!recording) {
+      recording = db.prepare(`
+        SELECT * FROM recordings 
+        WHERE meeting_id = ? AND (duration_seconds >= 2 OR size_bytes > 5000 OR status = 'recording')
+        ORDER BY created_at DESC LIMIT 1
+      `).get(id);
+      if (!recording) {
+        recording = db.prepare('SELECT * FROM recordings WHERE meeting_id = ? ORDER BY created_at DESC LIMIT 1').get(id);
+      }
+    }
 
     if (!recording) {
       res.status(404).json({ error: 'Recording not found for this meeting' });
@@ -430,11 +584,21 @@ meetingsRouter.get('/:id/recording/stream', (req: Request, res: Response) => {
   }
 });
 
-// 8. Direct Download Recording
+// 8. Direct Download Recording (accepts recording.id OR meeting.id)
 meetingsRouter.get('/:id/recording/download', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const recording: any = db.prepare('SELECT * FROM recordings WHERE id = ? OR meeting_id = ?').get(id, id);
+    let recording: any = db.prepare('SELECT * FROM recordings WHERE id = ?').get(id);
+    if (!recording) {
+      recording = db.prepare(`
+        SELECT * FROM recordings 
+        WHERE meeting_id = ? AND (duration_seconds >= 2 OR size_bytes > 5000 OR status = 'recording')
+        ORDER BY created_at DESC LIMIT 1
+      `).get(id);
+      if (!recording) {
+        recording = db.prepare('SELECT * FROM recordings WHERE meeting_id = ? ORDER BY created_at DESC LIMIT 1').get(id);
+      }
+    }
 
     if (!recording || !fs.existsSync(recording.file_path)) {
       res.status(404).json({ error: 'Recording not found' });

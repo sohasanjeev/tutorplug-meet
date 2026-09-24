@@ -29,7 +29,8 @@ function requireAdmin(req: Request, res: Response, next: any) {
   }
 
   const dbUser: any = db.prepare('SELECT id, email, role FROM users WHERE id = ?').get(targetId);
-  const isDedicatedAdmin = dbUser && ['admin@tutorplug.com', 'sanjeev@tutorplug.com'].includes((dbUser.email || '').toLowerCase());
+  const ADMIN_EMAILS = ['admin@tutorplug.com', 'sanjeev@tutorplug.com', 'sanjeevgupta052020@gmail.com'];
+  const isDedicatedAdmin = dbUser && (ADMIN_EMAILS.includes((dbUser.email || '').toLowerCase()) || dbUser.role === 'admin');
 
   if (!dbUser || (!isDedicatedAdmin && dbUser.role !== 'admin')) {
     res.status(403).json({ error: 'Access denied: Administrator authorization required.' });

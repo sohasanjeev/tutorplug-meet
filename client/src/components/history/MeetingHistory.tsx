@@ -195,7 +195,7 @@ export const MeetingHistory: React.FC<MeetingHistoryProps> = ({ onBackToHome }) 
 
             return (
               <div
-                key={meeting.id}
+                key={meeting.recording_id || meeting.id}
                 className="bg-white dark:bg-[#121316] border border-slate-200 dark:border-[#23252a] hover:border-orange-500/50 dark:hover:border-orange-500/50 rounded-3xl p-5 shadow-sm hover:shadow-xl transition-all flex flex-col justify-between group space-y-4"
               >
                 <div>
@@ -252,8 +252,8 @@ export const MeetingHistory: React.FC<MeetingHistoryProps> = ({ onBackToHome }) 
                 {/* Card Action Footer */}
                 <div className="pt-3 border-t border-slate-100 dark:border-white/5 flex items-center justify-between">
                   <button
-                    onClick={() => handleOpenDetail(meeting.id)}
-                    className="flex-1 py-2 px-4 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-800 dark:text-white font-semibold text-xs flex items-center justify-center space-x-2 transition-colors mr-2"
+                    onClick={() => handleOpenDetail(meeting.recording_id || meeting.id)}
+                    className="flex-1 py-2 px-4 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-800 dark:text-white font-semibold text-xs flex items-center justify-center space-x-2 transition-colors mr-2 cursor-pointer"
                   >
                     <Play className="w-3.5 h-3.5 fill-current text-orange-500" />
                     <span>View Class & Recording</span>
@@ -311,7 +311,7 @@ export const MeetingHistory: React.FC<MeetingHistoryProps> = ({ onBackToHome }) 
                     <div className="aspect-video w-full bg-black relative flex items-center justify-center">
                       <video
                         ref={videoRef}
-                        src={`/api/meetings/${selectedMeetingDetail.meeting.id}/recording/stream`}
+                        src={`/api/meetings/${selectedMeetingDetail.recording?.id || selectedMeetingDetail.meeting.id}/recording/stream`}
                         controls
                         playsInline
                         className="w-full h-full object-contain"
@@ -343,7 +343,7 @@ export const MeetingHistory: React.FC<MeetingHistoryProps> = ({ onBackToHome }) 
                         </span>
 
                         <a
-                          href={`/api/meetings/${selectedMeetingDetail.meeting.id}/recording/download`}
+                          href={`/api/meetings/${selectedMeetingDetail.recording?.id || selectedMeetingDetail.meeting.id}/recording/download`}
                           download
                           className="py-1.5 px-3.5 rounded-full bg-orange-500 hover:bg-orange-400 text-white font-bold text-xs flex items-center space-x-1.5 transition-colors shadow"
                         >
