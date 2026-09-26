@@ -22,8 +22,23 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   onOpenProfile,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [, setTrackRevision] = React.useState(0);
 
+  // Dedicated remote audio receiver - plays continuously regardless of camera state
+  useEffect(() => {
+    if (!audioRef.current) return;
+    if (!stream || isLocal) {
+      audioRef.current.srcObject = null;
+      return;
+    }
+    if (audioRef.current.srcObject !== stream) {
+      audioRef.current.srcObject = stream;
+    }
+    audioRef.current.play().catch(() => {});
+  }, [stream, isLocal]);
+
+  // Video element stream handler
   useEffect(() => {
     if (!stream) {
       if (videoRef.current) {
@@ -44,6 +59,9 @@ export const VideoTile: React.FC<VideoTileProps> = ({
       if (videoRef.current) {
         videoRef.current.play().catch(() => {});
       }
+      if (audioRef.current && !isLocal) {
+        audioRef.current.play().catch(() => {});
+      }
     };
 
     stream.addEventListener('addtrack', handleTracksChanged);
@@ -53,12 +71,12 @@ export const VideoTile: React.FC<VideoTileProps> = ({
       stream.removeEventListener('addtrack', handleTracksChanged);
       stream.removeEventListener('removetrack', handleTracksChanged);
     };
-  }, [stream]);
+  }, [stream, isLocal, participant.isScreenSharing]);
 
   const isSharing = Boolean(participant.isScreenSharing);
   const videoTracks = stream ? stream.getVideoTracks() : [];
   const hasLiveVideoTrack = videoTracks.some((t) => t.readyState !== 'ended');
-  const hasVideo = isSharing ? (videoTracks.length > 0) : (participant.videoEnabled && hasLiveVideoTrack);
+  const hasVideo = isSharing || (participant.videoEnabled && hasLiveVideoTrack);
 
   return (
     <div
@@ -66,6 +84,17 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         isActiveSpeaker ? 'active-speaker-ring ring-offset-2 ring-offset-[#131314]' : ''
       }`}
     >
+      {/* Dedicated always-on audio element for remote participants - independent of video visibility */}
+      {!isLocal && (
+        <audio
+          ref={audioRef}
+          autoPlay
+          playsInline
+          muted={false}
+          className="sr-only"
+        />
+      )}
+
       <video
         ref={videoRef}
         autoPlay

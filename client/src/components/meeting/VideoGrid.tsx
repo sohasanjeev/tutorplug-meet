@@ -73,12 +73,34 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   }
 
   participants.forEach((p) => {
-    allTiles.push({
-      participant: p,
-      stream: remoteStreams.get(p.socketId) || null,
-      isLocal: false,
-      tileId: p.socketId,
-    });
+    if (p.isScreenSharing) {
+      allTiles.push({
+        participant: {
+          ...p,
+          displayName: `${p.displayName} (Presentation)`,
+          isScreenSharing: true,
+        },
+        stream: remoteStreams.get(p.socketId) || null,
+        isLocal: false,
+        tileId: `${p.socketId}-presentation`,
+      });
+      allTiles.push({
+        participant: {
+          ...p,
+          isScreenSharing: false,
+        },
+        stream: remoteStreams.get(p.socketId) || null,
+        isLocal: false,
+        tileId: p.socketId,
+      });
+    } else {
+      allTiles.push({
+        participant: p,
+        stream: remoteStreams.get(p.socketId) || null,
+        isLocal: false,
+        tileId: p.socketId,
+      });
+    }
   });
 
   const totalCount = allTiles.length;

@@ -280,3 +280,33 @@ authRouter.put('/profile', (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || 'Failed to update profile' });
   }
 });
+
+// 7. Log Site Visit / Attendance
+authRouter.post('/log-visit', (req: Request, res: Response) => {
+  try {
+    const { userId, userName, userEmail, path, action, meetingCode } = req.body;
+    const ip = ((req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const userAgent = (req.headers['user-agent'] || 'browser').slice(0, 255);
+    const id = uuidv4();
+
+    db.prepare(`
+      INSERT INTO site_visits (
+        id, user_id, user_name, user_email, ip_address, user_agent, path, action, meeting_code
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      userId || null,
+      userName || 'Anonymous Visitor',
+      userEmail || null,
+      ip,
+      userAgent,
+      path || '/',
+      action || 'visit',
+      meetingCode || null
+    );
+
+    res.json({ success: true, visitId: id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to log visit' });
+  }
+});

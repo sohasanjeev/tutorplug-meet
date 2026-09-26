@@ -291,7 +291,7 @@ meetingsRouter.get('/history/all', (req: Request, res: Response) => {
         FROM recordings r
         JOIN meetings m ON m.id = r.meeting_id
         LEFT JOIN users u ON u.id = m.host_id
-        WHERE (r.duration_seconds >= 2 OR r.size_bytes > 5000 OR r.status = 'recording')
+        WHERE (r.duration_seconds >= 1 OR r.size_bytes > 0 OR r.status = 'ready' OR r.status = 'recording')
         ORDER BY COALESCE(r.started_at, r.created_at) DESC
       `).all();
 
@@ -321,7 +321,7 @@ meetingsRouter.get('/history/all', (req: Request, res: Response) => {
         LEFT JOIN users u ON u.id = m.host_id
         WHERE m.id NOT IN (
           SELECT DISTINCT meeting_id FROM recordings 
-          WHERE duration_seconds >= 2 OR size_bytes > 5000 OR status = 'recording'
+          WHERE duration_seconds >= 1 OR size_bytes > 0 OR status = 'ready' OR status = 'recording'
         )
         ORDER BY m.created_at DESC
       `).all();
@@ -353,7 +353,7 @@ meetingsRouter.get('/history/all', (req: Request, res: Response) => {
         FROM recordings r
         JOIN meetings m ON m.id = r.meeting_id
         LEFT JOIN users u ON u.id = m.host_id
-        WHERE (r.duration_seconds >= 2 OR r.size_bytes > 5000 OR r.status = 'recording')
+        WHERE (r.duration_seconds >= 1 OR r.size_bytes > 0 OR r.status = 'ready' OR r.status = 'recording')
           AND (
             m.host_id = ?
             OR m.id IN (SELECT meeting_id FROM meeting_participants WHERE user_id = ? OR LOWER(display_name) = LOWER(?))
@@ -388,7 +388,7 @@ meetingsRouter.get('/history/all', (req: Request, res: Response) => {
         LEFT JOIN users u ON u.id = m.host_id
         WHERE m.id NOT IN (
           SELECT DISTINCT meeting_id FROM recordings 
-          WHERE duration_seconds >= 2 OR size_bytes > 5000 OR status = 'recording'
+          WHERE duration_seconds >= 1 OR size_bytes > 0 OR status = 'ready' OR status = 'recording'
         )
         AND (
           m.host_id = ?
@@ -401,8 +401,41 @@ meetingsRouter.get('/history/all', (req: Request, res: Response) => {
 
       items = [...recordingsWithMeetings, ...meetingsWithoutRec];
     } else {
-      // Anonymous / Unauthenticated: return empty list
-      items = [];
+      // Unauthenticated / Guest: show recent recorded classes or filter by code
+      const queryCode = (req.query.code as string)?.trim()?.toLowerCase();
+      let querySql = `
+        SELECT 
+          r.id AS id,
+          r.id AS recording_id,
+          r.meeting_id,
+          r.file_name AS recording_file_name,
+          r.duration_seconds AS recording_duration,
+          r.size_bytes AS recording_size_bytes,
+          r.status AS recording_status,
+          COALESCE(r.started_at, r.created_at, m.created_at) AS created_at,
+          r.started_at,
+          r.ended_at,
+          m.code,
+          m.title,
+          m.description,
+          m.host_id,
+          m.is_permanent,
+          u.name AS host_name,
+          u.email AS host_email,
+          (SELECT COUNT(*) FROM meeting_participants WHERE meeting_id = m.id) AS participant_count,
+          (SELECT COUNT(*) FROM messages WHERE meeting_id = m.id) AS message_count
+        FROM recordings r
+        JOIN meetings m ON m.id = r.meeting_id
+        LEFT JOIN users u ON u.id = m.host_id
+        WHERE (r.duration_seconds >= 1 OR r.size_bytes > 0 OR r.status = 'ready')
+      `;
+      const queryParams: any[] = [];
+      if (queryCode) {
+        querySql += ' AND LOWER(m.code) = ? ';
+        queryParams.push(queryCode);
+      }
+      querySql += ' ORDER BY COALESCE(r.started_at, r.created_at) DESC LIMIT 50';
+      items = db.prepare(querySql).all(...queryParams);
     }
 
     res.json({ meetings: items });

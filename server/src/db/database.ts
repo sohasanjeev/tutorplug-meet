@@ -177,6 +177,22 @@ export function initDatabase() {
     );
   `);
 
+  // 8. Site Visitors & Meeting Attendance Log table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS site_visits (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      user_name TEXT,
+      user_email TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      path TEXT,
+      action TEXT NOT NULL DEFAULT 'visit', -- 'visit', 'login', 'register', 'join_meeting', 'create_meeting'
+      meeting_code TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
   // Create indexes for fast lookup
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_meetings_code ON meetings(code);
@@ -185,6 +201,7 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_participants_meeting_id ON meeting_participants(meeting_id);
     CREATE INDEX IF NOT EXISTS idx_link_requests_user ON link_requests(user_id);
     CREATE INDEX IF NOT EXISTS idx_link_requests_status ON link_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_site_visits_created ON site_visits(created_at);
   `);
 
   // Seed default admin and demo user

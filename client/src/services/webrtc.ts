@@ -7,6 +7,22 @@ const ICE_SERVERS = [
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
   { urls: 'stun:global.stun.twilio.com:3478' },
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  {
+    urls: 'turn:standard.relay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:standard.relay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:standard.relay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ];
 
 function createBlankTrack(kind: 'audio' | 'video'): MediaStreamTrack {
@@ -48,7 +64,6 @@ export class WebRTCManager {
   private audioAnalyser: AnalyserNode | null = null;
   private audioContext: AudioContext | null = null;
   private animFrameId: number | null = null;
-  private mediaRecorder: MediaRecorder | null = null;
 
   constructor(
     socket: Socket,
@@ -71,7 +86,6 @@ export class WebRTCManager {
 
     this.localStream = stream;
     this.setupAudioAnalysis(stream);
-    this.setupContinuousRecordingIngest(stream);
 
     // Update existing peer connections with new tracks
     this.peerConnections.forEach((pc) => {
@@ -136,42 +150,7 @@ export class WebRTCManager {
   }
 
   /**
-   * Continuous stream chunk recorder that transmits WebM packets to the backend recording engine
-   */
-  private setupContinuousRecordingIngest(stream: MediaStream) {
-    try {
-      if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-        this.mediaRecorder.stop();
-      }
-
-      // Check supported MIME types
-      let mimeType = 'video/webm;codecs=vp8,opus';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'video/webm';
-      }
-
-      this.mediaRecorder = new MediaRecorder(stream, {
-        mimeType,
-        videoBitsPerSecond: 1200000,
-        audioBitsPerSecond: 128000,
-      });
-
-      this.mediaRecorder.ondataavailable = async (e) => {
-        if (e.data && e.data.size > 0) {
-          const arrayBuffer = await e.data.arrayBuffer();
-          this.socket.emit('recording-chunk', arrayBuffer);
-        }
-      };
-
-      // Emit chunk every 2000ms for continuous streaming
-      this.mediaRecorder.start(2000);
-    } catch (err) {
-      console.warn('Continuous recording ingest setup warning:', err);
-    }
-  }
-
-  /**
-   * Initiate peer connection as the caller
+   * Initiate peer connection as the caller or responder
    */
   async createPeerConnection(remoteSocketId: string, isInitiator: boolean): Promise<RTCPeerConnection> {
     if (this.peerConnections.has(remoteSocketId)) {
@@ -208,13 +187,26 @@ export class WebRTCManager {
       if (event.track && !remoteStream.getTracks().includes(event.track)) {
         remoteStream.addTrack(event.track);
       }
-      // Pass a fresh wrapper stream so React components immediately receive reference changes
       this.onRemoteStreamCallback(remoteSocketId, new MediaStream(remoteStream.getTracks()));
     };
 
-    // Peer connection state changes
+    // Auto-recovery on connection state issues
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        try {
+          if (isInitiator) {
+            pc.restartIce();
+            pc.createOffer({ iceRestart: true }).then((offer) => {
+              pc.setLocalDescription(offer);
+              this.socket.emit('signal', { to: remoteSocketId, signal: { type: 'offer', sdp: offer } });
+            }).catch(() => {});
+          }
+        } catch {}
+      }
+    };
+
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      if (pc.connectionState === 'closed') {
         this.closePeer(remoteSocketId);
       }
     };
@@ -295,14 +287,14 @@ export class WebRTCManager {
   }
 
   /**
-   * Start screen sharing
+   * Start screen sharing with immediate renegotiation
    */
   async startScreenShare(): Promise<MediaStream> {
     const screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
         frameRate: { ideal: 30, max: 60 },
-        width: { ideal: 1920, max: 3840 },
-        height: { ideal: 1080, max: 2160 },
+        width: { ideal: 1920, max: 1920 },
+        height: { ideal: 1080, max: 1080 },
       },
       audio: true,
     });
@@ -310,26 +302,26 @@ export class WebRTCManager {
     this.screenStream = screenStream;
     const videoTrack = screenStream.getVideoTracks()[0];
 
-    // Replace video track in all active peer connections
-    this.peerConnections.forEach(async (pc, remoteSocketId) => {
+    // Replace video track in all active peer connections and re-negotiate
+    for (const [remoteSocketId, pc] of this.peerConnections.entries()) {
       const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
       if (sender) {
-        sender.replaceTrack(videoTrack).catch(() => {});
+        await sender.replaceTrack(videoTrack).catch(() => {});
       } else {
-        pc.addTrack(videoTrack, screenStream);
-        try {
-          const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-          await pc.setLocalDescription(offer);
-          this.socket.emit('signal', { to: remoteSocketId, signal: { type: 'offer', sdp: offer } });
-        } catch {}
+        try { pc.addTrack(videoTrack, screenStream); } catch {}
       }
-    });
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        this.socket.emit('signal', { to: remoteSocketId, signal: { type: 'offer', sdp: offer } });
+      } catch (err) {}
+    }
 
     return screenStream;
   }
 
   /**
-   * Stop screen share and restore camera track
+   * Stop screen share and restore camera track with renegotiation
    */
   stopScreenShare() {
     if (this.screenStream) {
@@ -340,11 +332,16 @@ export class WebRTCManager {
     if (this.localStream) {
       const cameraTrack = this.localStream.getVideoTracks()[0];
       if (cameraTrack) {
-        this.peerConnections.forEach((pc) => {
+        this.peerConnections.forEach(async (pc, remoteSocketId) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
           if (sender) {
-            sender.replaceTrack(cameraTrack).catch(() => {});
+            await sender.replaceTrack(cameraTrack).catch(() => {});
           }
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            this.socket.emit('signal', { to: remoteSocketId, signal: { type: 'offer', sdp: offer } });
+          } catch (err) {}
         });
       }
     }
@@ -364,9 +361,6 @@ export class WebRTCManager {
   destroy() {
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
     if (this.audioContext) this.audioContext.close();
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      try { this.mediaRecorder.stop(); } catch {}
-    }
     this.peerConnections.forEach((pc) => pc.close());
     this.peerConnections.clear();
     this.pendingCandidates.clear();

@@ -278,4 +278,39 @@ export const api = {
     if (!res.ok) throw new Error('Failed to delete recording');
     return res.json();
   },
+
+  async getAdminUsers() {
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
+    const res = await fetch(`${API_BASE}/admin/users`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error('Failed to fetch admin users');
+    return res.json();
+  },
+
+  async getAdminVisitors(limit = 150) {
+    const token = localStorage.getItem('tutorplug_token') || localStorage.getItem('aurameet_token');
+    const res = await fetch(`${API_BASE}/admin/visitors?limit=${limit}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error('Failed to fetch admin visitors');
+    return res.json();
+  },
+
+  async logVisit(params: {
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    path?: string;
+    action?: string;
+    meetingCode?: string;
+  }) {
+    try {
+      await fetch(`${API_BASE}/auth/log-visit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+    } catch {}
+  },
 };

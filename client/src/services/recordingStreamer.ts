@@ -77,6 +77,8 @@ export class RecordingStreamer {
     if (params.meetingTitle) this.meetingTitle = params.meetingTitle;
   }
 
+  private audioSources: MediaStreamAudioSourceNode[] = [];
+
   private reconnectAudio() {
     try {
       if (!this.audioContext) {
@@ -89,6 +91,12 @@ export class RecordingStreamer {
         this.audioContext.resume().catch(() => {});
       }
 
+      // Disconnect previous audio sources to prevent memory leaks and audio feedback
+      this.audioSources.forEach((src) => {
+        try { src.disconnect(); } catch {}
+      });
+      this.audioSources = [];
+
       // Add local audio
       if (this.localStream && this.localStream.getAudioTracks().length > 0) {
         const audioTrack = this.localStream.getAudioTracks()[0];
@@ -96,6 +104,7 @@ export class RecordingStreamer {
           const micStream = new MediaStream([audioTrack]);
           const source = this.audioContext.createMediaStreamSource(micStream);
           source.connect(this.audioDestination!);
+          this.audioSources.push(source);
         }
       }
 
@@ -107,6 +116,7 @@ export class RecordingStreamer {
             const rStream = new MediaStream([remoteAudio]);
             const rSource = this.audioContext!.createMediaStreamSource(rStream);
             rSource.connect(this.audioDestination!);
+            this.audioSources.push(rSource);
           }
         }
       });

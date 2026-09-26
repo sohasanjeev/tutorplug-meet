@@ -240,3 +240,59 @@ adminRouter.delete('/recordings/:id', (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || 'Failed to delete recording' });
   }
 });
+
+// 8. Admin List All Registered Users (Students, Teachers, Admins)
+adminRouter.get('/users', (_req: Request, res: Response) => {
+  try {
+    const users = db.prepare(`
+      SELECT 
+        u.id,
+        u.name,
+        u.email,
+        u.role,
+        u.user_type,
+        u.roll_number,
+        u.class_grade,
+        u.bio,
+        u.avatar,
+        u.personal_meeting_code,
+        u.allowed_link_quota,
+        u.created_at,
+        (SELECT COUNT(*) FROM meetings WHERE host_id = u.id) AS meetings_hosted_count,
+        (SELECT COUNT(*) FROM meeting_participants WHERE user_id = u.id) AS classes_attended_count
+      FROM users u
+      ORDER BY u.created_at DESC
+    `).all();
+
+    res.json({ users });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch users' });
+  }
+});
+
+// 9. Admin List Site Visits & Meeting Attendance Logs
+adminRouter.get('/visitors', (req: Request, res: Response) => {
+  try {
+    const limit = parseInt((req.query.limit as string) || '150', 10);
+    const visits = db.prepare(`
+      SELECT * FROM site_visits
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit);
+
+    const totalVisits = db.prepare('SELECT COUNT(*) as count FROM site_visits').get() as any;
+    const uniqueVisitors = db.prepare('SELECT COUNT(DISTINCT ip_address) as count FROM site_visits').get() as any;
+    const meetingJoins = db.prepare("SELECT COUNT(*) as count FROM site_visits WHERE action = 'join_meeting'").get() as any;
+
+    res.json({
+      visits,
+      stats: {
+        totalVisits: totalVisits ? totalVisits.count : 0,
+        uniqueVisitors: uniqueVisitors ? uniqueVisitors.count : 0,
+        meetingJoins: meetingJoins ? meetingJoins.count : 0,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch visitors' });
+  }
+});

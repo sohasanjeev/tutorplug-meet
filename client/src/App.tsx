@@ -13,6 +13,7 @@ import { AuthModal } from './components/auth/AuthModal.js';
 import { useAuth } from './context/AuthContext.js';
 import { UserProfileModal } from './components/meeting/UserProfileModal.js';
 import { Shield } from 'lucide-react';
+import { api } from './services/api.js';
 
 const AdminSecurityGate: React.FC<{ onBackToHome: () => void }> = ({ onBackToHome }) => {
   const { user, login, logout } = useAuth();
@@ -125,6 +126,17 @@ const AppContent: React.FC = () => {
   const [activeCode, setActiveCode] = useState<string>('');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  // Automatically log platform visit for executive admin tracking
+  useEffect(() => {
+    api.logVisit({
+      userId: user?.id,
+      userName: user?.name,
+      userEmail: user?.email,
+      path: window.location.pathname + window.location.hash,
+      action: 'visit',
+    });
+  }, [user]);
 
   // Handle URL hash and pathname changes for robust deep linking across /admin, /history, and meeting rooms
   useEffect(() => {

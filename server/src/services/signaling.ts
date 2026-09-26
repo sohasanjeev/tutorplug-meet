@@ -154,7 +154,9 @@ export function setupSignaling(io: Server) {
       const recordingStatus = RecordingManager.startRecording(meeting.id);
 
       // Designate active recorder streamer (host preferred)
-      if (role === 'host' || !roomStreamerMap.has(meetingCode)) {
+      if (role === 'host') {
+        roomStreamerMap.set(meetingCode, targetSocket.id);
+      } else if (!roomStreamerMap.has(meetingCode)) {
         roomStreamerMap.set(meetingCode, targetSocket.id);
       }
 
@@ -236,6 +238,26 @@ export function setupSignaling(io: Server) {
           socket.emit('meeting:already-ended', { message: 'This meeting has already ended.' });
           return;
         }
+
+        // Log join activity in site_visits table for admin analytics
+        try {
+          const clientIp = ((socket.handshake.headers['x-forwarded-for'] as string) || socket.handshake.address || '127.0.0.1').split(',')[0].trim();
+          const userAgent = (socket.handshake.headers['user-agent'] || 'browser').slice(0, 255);
+          db.prepare(`
+            INSERT INTO site_visits (
+              id, user_id, user_name, user_email, ip_address, user_agent, path, action, meeting_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'join_meeting', ?)
+          `).run(
+            uuidv4(),
+            userId || null,
+            displayName,
+            data?.email || null,
+            clientIp,
+            userAgent,
+            `/room/${meetingCode}`,
+            meetingCode
+          );
+        } catch (vErr) {}
 
         // Determine Host Authority:
         const codeSlug = (meetingCode.split('-')[1] || '').toLowerCase();
